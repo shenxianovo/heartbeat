@@ -18,6 +18,7 @@ namespace server.Services
                 device = new Device
                 {
                     DeviceName = request.DeviceName,
+                    ApiKey = request.ApiKey,
                 };
 
                 _db.Devices.Add(device);

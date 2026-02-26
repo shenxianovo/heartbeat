@@ -28,6 +28,9 @@ namespace server.Data
 
                 entity.HasIndex(e => e.DeviceName);
                 entity.HasIndex(e => e.StartTime);
+
+                // 复合索引：用于合并查询时快速查找同设备+同应用的最新记录
+                entity.HasIndex(e => new { e.DeviceName, e.AppName, e.EndTime });
             });
         }
     }

@@ -43,12 +43,19 @@ namespace client.Services
             try
             {
                 var res = await _client.PostAsJsonAsync(_apiUrl, dto);
-                res.EnsureSuccessStatusCode();
+                if (!res.IsSuccessStatusCode)
+                {
+                    var body = await res.Content.ReadAsStringAsync();
+                    Log.Warning("上传失败 [{StatusCode}]: {Body}，{Count} 条记录已缓存到本地",
+                        (int)res.StatusCode, body, usages.Count);
+                    _cache.Add(usages);
+                    return;
+                }
                 Log.Information("上传成功，共 {Count} 条记录", usages.Count);
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "上传失败，{Count} 条记录已缓存到本地", usages.Count);
+                Log.Warning(ex, "上传失败（网络异常），{Count} 条记录已缓存到本地", usages.Count);
                 _cache.Add(usages);
             }
         }
@@ -63,13 +70,18 @@ namespace client.Services
             try
             {
                 var res = await _client.PostAsJsonAsync(_apiUrl, dto);
-                res.EnsureSuccessStatusCode();
+                if (!res.IsSuccessStatusCode)
+                {
+                    var body = await res.Content.ReadAsStringAsync();
+                    Log.Warning("缓存记录上传失败 [{StatusCode}]: {Body}", (int)res.StatusCode, body);
+                    return;
+                }
                 _cache.Clear();
                 Log.Information("缓存记录上传成功，已清除本地缓存");
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "缓存记录上传失败，保留本地缓存待下次重试");
+                Log.Warning(ex, "缓存记录上传失败（网络异常），保留本地缓存待下次重试");
             }
         }
     }

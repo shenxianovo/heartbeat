@@ -1,6 +1,6 @@
 import type { AppUsage } from './types'
 
-const BASE = '/api/v1'
+const BASE = '/heartbeat/api/v1'
 
 export async function fetchDevices(): Promise<string[]> {
   const res = await fetch(`${BASE}/devices`)

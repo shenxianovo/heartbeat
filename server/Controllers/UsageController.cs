@@ -35,5 +35,12 @@ namespace server.Controllers
             var result = await _service.GetUsageAsync(deviceName, date);
             return Ok(result);
         }
+
+        [HttpGet("/api/v1/devices")]
+        public async Task<IActionResult> GetDevices()
+        {
+            var result = await _service.GetDeviceNamesAsync();
+            return Ok(result);
+        }
     }
 }

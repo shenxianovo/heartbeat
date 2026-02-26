@@ -7,5 +7,6 @@
         public string ApiKey { get; set; } = string.Empty;
         public int SampleIntervalSeconds { get; set; } = 5;
         public int UploadIntervalMinutes { get; set; } = 1;
+        public MonitorMode MonitorMode { get; set; } = MonitorMode.TopMost;
     }
 }

@@ -1,5 +1,6 @@
 ﻿using client.DTOs;
 using client.Storage;
+using Serilog;
 using System.Net.Http.Json;
 
 namespace client.Services
@@ -38,15 +39,16 @@ namespace client.Services
         public async Task UploadAsync(List<AppUsageItem> usages)
         {
             var dto = MapToDto(usages);
+            Log.Information("正在上传 {Count} 条使用记录到 {Url}...", usages.Count, _apiUrl);
             try
             {
                 var res = await _client.PostAsJsonAsync(_apiUrl, dto);
                 res.EnsureSuccessStatusCode();
-                Console.WriteLine($"Uploaded {usages.Count} items.");
+                Log.Information("上传成功，共 {Count} 条记录", usages.Count);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Upload failed, saving to cache: {ex.Message}");
+                Log.Warning(ex, "上传失败，{Count} 条记录已缓存到本地", usages.Count);
                 _cache.Add(usages);
             }
         }
@@ -56,8 +58,19 @@ namespace client.Services
             var cached = _cache.Load();
             if (cached.Count == 0) return;
 
-            await UploadAsync(cached);
-            _cache.Clear();
+            Log.Information("发现 {Count} 条缓存记录，尝试上传...", cached.Count);
+            var dto = MapToDto(cached);
+            try
+            {
+                var res = await _client.PostAsJsonAsync(_apiUrl, dto);
+                res.EnsureSuccessStatusCode();
+                _cache.Clear();
+                Log.Information("缓存记录上传成功，已清除本地缓存");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "缓存记录上传失败，保留本地缓存待下次重试");
+            }
         }
     }
 }

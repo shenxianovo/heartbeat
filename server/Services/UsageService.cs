@@ -10,9 +10,19 @@ namespace server.Services
         private readonly AppDbContext _db = db;
 
         /// <summary>
-        /// 合并容差：新记录的 StartTime 与已有记录的 EndTime 相差不超过此值则合并
+        /// 合并容差：同设备同应用首尾相连在此范围内的记录合并（处理客户端上传截断）
         /// </summary>
-        private static readonly TimeSpan MergeTolerance = TimeSpan.FromMinutes(2);
+        private static readonly TimeSpan MergeTolerance = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// 时间校验容差：客户端时间与服务端时间偏差不得超过此值
+        /// </summary>
+        private static readonly TimeSpan TimeSkewTolerance = TimeSpan.FromMinutes(10);
+
+        /// <summary>
+        /// 单条记录最大时长限制
+        /// </summary>
+        private static readonly TimeSpan MaxDuration = TimeSpan.FromHours(24);
 
         public async Task SaveUsageAsync(UsageUploadRequest request)
         {
@@ -29,15 +39,21 @@ namespace server.Services
                 _db.Devices.Add(device);
             }
 
-            // 按 AppName 分组处理，减少数据库查询次数
-            var groups = request.Usages
+            var now = DateTimeOffset.UtcNow;
+
+            var validUsages = request.Usages
                 .Where(u => !string.IsNullOrEmpty(u.AppName)
                          && u.StartTime != default
                          && u.EndTime > u.StartTime
-                         && u.StartTime.Year >= 2020) // 过滤无效记录
-                .GroupBy(u => u.AppName);
+                         && u.StartTime.Year >= 2020
+                         && u.EndTime <= now + TimeSkewTolerance       // 不能超过服务端当前时间太多
+                         && u.StartTime >= now - TimeSkewTolerance - MaxDuration // 不能太久远
+                         && (u.EndTime - u.StartTime) <= MaxDuration)  // 单条时长不超过 24 小时
+                .OrderBy(u => u.StartTime)
+                .ToList();
 
-            foreach (var group in groups)
+            // 按 AppName 分组，对每组尝试与数据库中最新记录合并
+            foreach (var group in validUsages.GroupBy(u => u.AppName))
             {
                 var appName = group.Key;
 
@@ -47,19 +63,16 @@ namespace server.Services
                     .OrderByDescending(x => x.EndTime)
                     .FirstOrDefaultAsync();
 
-                // 将同一应用的记录按时间排序后逐条处理
-                foreach (var u in group.OrderBy(u => u.StartTime))
+                foreach (var u in group)
                 {
                     if (existing != null
-                        && u.StartTime >= existing.StartTime
+                        && u.AppName == existing.AppName
+                        && u.StartTime >= existing.EndTime
                         && u.StartTime <= existing.EndTime + MergeTolerance)
                     {
-                        // 合并：扩展结束时间（只延长不缩短）
-                        if (u.EndTime > existing.EndTime)
-                        {
-                            existing.EndTime = u.EndTime;
-                            existing.DurationSeconds = (int)(existing.EndTime - existing.StartTime).TotalSeconds;
-                        }
+                        // 首尾相连，合并（扩展结束时间）
+                        existing.EndTime = u.EndTime;
+                        existing.DurationSeconds = (int)(existing.EndTime - existing.StartTime).TotalSeconds;
                     }
                     else
                     {

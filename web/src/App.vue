@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import type { AppSummary } from './types'
-import { fetchDevices, fetchUsage } from './api'
+import { fetchDevices, fetchUsage, getIconUrl } from './api'
 import type { AppUsage } from './types'
 
 function localDateStr(): string {
@@ -139,7 +139,15 @@ setInterval(() => {
         </div>
         <div class="card">
           <span class="card-label">最常使用</span>
-          <span class="card-value accent top-app">{{ appSummaries[0]?.appName ?? '--' }}</span>
+          <span class="card-value accent top-app" v-if="appSummaries[0]">
+            <img
+              :src="getIconUrl(appSummaries[0].appName)"
+              class="top-app-icon"
+              @error="($event.target as HTMLImageElement).style.display = 'none'"
+            />
+            {{ appSummaries[0].appName }}
+          </span>
+          <span class="card-value accent top-app" v-else>--</span>
           <span class="card-sub" v-if="appSummaries[0]">
             {{ formatDuration(appSummaries[0].totalSeconds) }}
           </span>
@@ -174,6 +182,11 @@ setInterval(() => {
           <div v-for="(app, i) in appSummaries" :key="app.appName" class="rank-row">
             <div class="rank-meta">
               <span class="rank-i">{{ i + 1 }}</span>
+              <img
+                :src="getIconUrl(app.appName)"
+                class="rank-icon"
+                @error="($event.target as HTMLImageElement).style.display = 'none'"
+              />
               <span class="rank-name">{{ app.appName }}</span>
               <span class="rank-dur">{{ formatDuration(app.totalSeconds) }}</span>
             </div>
@@ -297,6 +310,16 @@ setInterval(() => {
 .card-value.top-app {
   font-size: 1.25rem;
   font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.top-app-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .card-value.status.alive {
@@ -379,6 +402,15 @@ setInterval(() => {
   color: var(--text-dim);
   font-size: 0.8rem;
   font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+}
+
+.rank-icon {
+  width: 20px;
+  height: 20px;
+  margin-right: 0.5rem;
+  border-radius: 4px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .rank-name {

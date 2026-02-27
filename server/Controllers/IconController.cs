@@ -14,7 +14,7 @@ namespace server.Controllers
         /// <summary>
         /// 获取应用图标
         /// </summary>
-        [HttpGet("{appName:regex(.+)}")]
+        [HttpGet("{appName}")]
         public async Task<IActionResult> Get(string appName)
         {
             var icon = await _db.AppIcons

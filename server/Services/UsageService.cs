@@ -114,7 +114,7 @@ namespace server.Services
 
             if (date.HasValue)
             {
-                var start = date.Value.Date;
+                var start = new DateTimeOffset(date.Value.Date, TimeSpan.Zero);
                 var end = start.AddDays(1);
 
                 query = query.Where(x =>

@@ -1,5 +1,4 @@
-﻿using client.Models;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace client.Utils
@@ -12,27 +11,75 @@ namespace client.Utils
         [DllImport("user32.dll")]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool IsWindowVisible(IntPtr hWnd);
+        // WinEventHook 相关
+        private delegate void WinEventDelegate(
+            IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
+            int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
 
         [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool IsIconic(IntPtr hWnd); // 是否最小化
-
-        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        private static extern IntPtr SetWinEventHook(
+            uint eventMin, uint eventMax,
+            IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc,
+            uint idProcess, uint idThread, uint dwFlags);
 
         [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+        private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern int GetWindowTextLength(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+        [DllImport("user32.dll")]
+        private static extern bool TranslateMessage(ref MSG lpMsg);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr DispatchMessage(ref MSG lpMsg);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostThreadMessage(uint idThread, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MSG
+        {
+            public IntPtr hwnd;
+            public uint message;
+            public IntPtr wParam;
+            public IntPtr lParam;
+            public uint time;
+            public POINT pt;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
+        private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+        private const uint EVENT_SYSTEM_MINIMIZESTART = 0x0016;
+        private const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
+        private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+        private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+        private const uint WM_QUIT = 0x0012;
+
+        private static WinEventDelegate? _winEventDelegate;
+        private static IntPtr _foregroundHook;
+        private static IntPtr _minimizeStartHook;
+        private static IntPtr _minimizeEndHook;
+        private static uint _messageLoopThreadId;
 
         /// <summary>
-        /// 获取最上层（最前台焦点）应用的进程名
+        /// 前台窗口切换时触发，参数为新的前台进程名（可能为 null）
         /// </summary>
-        public static string? GetTopMostProcessName()
+        public static event Action<string?>? ForegroundWindowChanged;
+
+        /// <summary>
+        /// 获取当前前台窗口的进程名
+        /// </summary>
+        public static string? GetForegroundProcessName()
         {
             IntPtr hwnd = GetForegroundWindow();
             if (hwnd == IntPtr.Zero) return null;
@@ -40,64 +87,64 @@ namespace client.Utils
         }
 
         /// <summary>
-        /// 获取所有前台可见（未最小化且可见）应用的进程名
+        /// 启动事件钩子，监听前台窗口切换。必须在专用线程上调用（内部运行消息循环）。
         /// </summary>
-        public static HashSet<string> GetForegroundProcessNames()
+        public static void StartHook()
         {
-            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            EnumWindows((hWnd, _) =>
+            _messageLoopThreadId = GetCurrentThreadId();
+
+            // 必须保持委托引用，防止 GC 回收
+            _winEventDelegate = new WinEventDelegate(OnWinEvent);
+
+            _foregroundHook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                IntPtr.Zero, _winEventDelegate,
+                0, 0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+
+            _minimizeStartHook = SetWinEventHook(
+                EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZESTART,
+                IntPtr.Zero, _winEventDelegate,
+                0, 0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+
+            _minimizeEndHook = SetWinEventHook(
+                EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZEEND,
+                IntPtr.Zero, _winEventDelegate,
+                0, 0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+
+            // 运行消息循环（阻塞当前线程）
+            while (GetMessage(out MSG msg, IntPtr.Zero, 0, 0) > 0)
             {
-                if (IsWindowVisible(hWnd) && !IsIconic(hWnd) && GetWindowTextLength(hWnd) > 0)
-                {
-                    var name = GetProcessNameFromHwnd(hWnd);
-                    if (name != null)
-                        result.Add(name);
-                }
-                return true;
-            }, IntPtr.Zero);
-            return result;
+                TranslateMessage(ref msg);
+                DispatchMessage(ref msg);
+            }
+
+            // 清理
+            if (_foregroundHook != IntPtr.Zero) UnhookWinEvent(_foregroundHook);
+            if (_minimizeStartHook != IntPtr.Zero) UnhookWinEvent(_minimizeStartHook);
+            if (_minimizeEndHook != IntPtr.Zero) UnhookWinEvent(_minimizeEndHook);
         }
 
         /// <summary>
-        /// 获取所有拥有主窗口的进程名（包括最小化的）
+        /// 停止事件钩子，退出消息循环
         /// </summary>
-        public static HashSet<string> GetAllWindowedProcessNames()
+        public static void StopHook()
         {
-            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            EnumWindows((hWnd, _) =>
+            if (_messageLoopThreadId != 0)
             {
-                if (IsWindowVisible(hWnd) && GetWindowTextLength(hWnd) > 0)
-                {
-                    var name = GetProcessNameFromHwnd(hWnd);
-                    if (name != null)
-                        result.Add(name);
-                }
-                return true;
-            }, IntPtr.Zero);
-            return result;
+                PostThreadMessage(_messageLoopThreadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+            }
         }
 
-        /// <summary>
-        /// 根据监测模式获取当前活跃的应用进程名集合
-        /// </summary>
-        public static HashSet<string> GetActiveProcessNames(MonitorMode mode)
+        private static void OnWinEvent(
+            IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
+            int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
         {
-            return mode switch
-            {
-                MonitorMode.TopMost => GetTopMostAsSet(),
-                MonitorMode.Foreground => GetForegroundProcessNames(),
-                MonitorMode.All => GetAllWindowedProcessNames(),
-                _ => GetTopMostAsSet()
-            };
-        }
-
-        private static HashSet<string> GetTopMostAsSet()
-        {
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var name = GetTopMostProcessName();
-            if (name != null)
-                set.Add(name);
-            return set;
+            // 对于所有事件，都重新获取当前前台窗口，确保准确
+            var processName = GetForegroundProcessName();
+            ForegroundWindowChanged?.Invoke(processName);
         }
 
         private static string? GetProcessNameFromHwnd(IntPtr hWnd)

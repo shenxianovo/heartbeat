@@ -18,14 +18,17 @@ try
 
     var configService = new ConfigService();
     var config = configService.LoadConfig();
-    Log.Information("配置加载完成 - 设备: {Device}, 采样间隔: {Sample}s, 上传间隔: {Upload}min, 监测模式: {Mode}",
-        config.DeviceName, config.SampleIntervalSeconds, config.UploadIntervalMinutes, config.MonitorMode);
+    Log.Information("配置加载完成 - 设备: {Device}, 上传间隔: {Upload}min",
+        config.DeviceName, config.UploadIntervalMinutes);
 
     var cache = new LocalCache("cache.json");
-    var monitorService = new AppMonitorService(config.MonitorMode);
+    using var monitorService = new AppMonitorService();
     var uploadService = new UsageUploadService(config.ApiUrl, config.ApiKey, config.DeviceName, cache);
 
-    TimerHelper.RunEvery(TimeSpan.FromSeconds(config.SampleIntervalSeconds), () => monitorService.RecordActiveApps());
+    // 启动事件驱动的前台窗口监听
+    monitorService.Start();
+
+    // 定时上传
     TimerHelper.RunEveryAsync(TimeSpan.FromMinutes(config.UploadIntervalMinutes), async () =>
     {
         var usages = monitorService.GetAndClearUsages();

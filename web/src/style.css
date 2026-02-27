@@ -1,15 +1,17 @@
 :root {
-  --bg: #0f0f0f;
-  --bg-card: #1a1a1a;
-  --border: #2a2a2a;
-  --text: #e5e5e5;
-  --text-dim: #888;
-  --accent: #e8a838;
-  --accent-sub: #d97706;
-  --alive: #22c55e;
-  --dead: #ef4444;
-}
+  --bg: #0d1117;
+  --bg-card: #161b22;
+  --border: #30363d;
 
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+
+  --accent: #2ea043;
+  --accent-sub: #238636;
+
+  --alive: #3fb950;
+  --dead: #f85149;
+}
 *,
 *::before,
 *::after {
@@ -19,11 +21,19 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+}
+
+input {
+  font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+select {
+  font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
 ::selection {

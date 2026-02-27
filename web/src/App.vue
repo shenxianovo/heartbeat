@@ -107,8 +107,9 @@ setInterval(() => {
     <header class="header">
       <div class="logo">
         <span class="dot" :class="{ alive: isAlive }"></span>
-        <span>heartbeat</span>
+        <span>-QuQ-</span>
       </div>
+      <span class="card-label">你在视奸我，对吧！</span>
       <div class="controls">
         <select v-model="selectedDevice" class="ctl">
           <option v-for="d in devices" :key="d" :value="d">{{ d }}</option>
@@ -121,25 +122,25 @@ setInterval(() => {
       <!-- 状态卡片 -->
       <section class="cards">
         <div class="card">
-          <span class="card-label">状态</span>
+          <span class="card-label">死了吗</span>
           <span
             class="card-value status"
             :class="isToday ? (isAlive ? 'alive' : 'dead') : 'off'"
           >
-            {{ isToday ? (isAlive ? 'ALIVE' : 'DEAD') : '--' }}
+            {{ isToday ? (isAlive ? '还活着' : '似了喵') : '--' }}
           </span>
           <span class="card-sub" v-if="lastActive && isToday">
             最后活跃 {{ lastActiveStr }}
           </span>
         </div>
         <div class="card">
-          <span class="card-label">总应用时长</span>
-          <span class="card-value accent">{{ formatDuration(totalSeconds) }}</span>
+          <span class="card-label">本次存活</span>
+          <span class="card-value accent" style="color: var(--text);">{{ formatDuration(totalSeconds) }}</span>
           <span class="card-sub">{{ appSummaries.length }} 个应用</span>
         </div>
         <div class="card">
-          <span class="card-label">最常使用</span>
-          <span class="card-value accent top-app" v-if="appSummaries[0]">
+          <span class="card-label">今日最爱</span>
+          <span class="card-value accent top-app" v-if="appSummaries[0]" style="color: var(--text);">
             <img
               :src="getIconUrl(appSummaries[0].appName)"
               class="top-app-icon"
@@ -149,7 +150,7 @@ setInterval(() => {
           </span>
           <span class="card-value accent top-app" v-else>--</span>
           <span class="card-sub" v-if="appSummaries[0]">
-            {{ formatDuration(appSummaries[0].totalSeconds) }}
+            沉迷时长 {{ formatDuration(appSummaries[0].totalSeconds) }}
           </span>
         </div>
       </section>
@@ -300,7 +301,7 @@ setInterval(() => {
 .card-value {
   font-size: 1.75rem;
   font-weight: 700;
-  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-family: 'Cascadia Code', 'Microsoft YaHei', 'SF Mono', 'Consolas', monospace;
 }
 
 .card-value.accent {

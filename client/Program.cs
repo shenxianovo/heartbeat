@@ -14,7 +14,8 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
-    Log.Information("Heartbeat 客户端启动");
+    var env = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production";
+    Log.Information("Heartbeat 客户端启动，环境: {Env}", env);
 
     var configService = new ConfigService();
     var config = configService.LoadConfig();
@@ -24,6 +25,7 @@ try
     var cache = new LocalCache("cache.json");
     using var monitorService = new AppMonitorService();
     var uploadService = new UsageUploadService(config.ApiUrl, config.ApiKey, config.DeviceName, cache);
+    var iconService = new IconUploadService(config.ApiUrl, config.ApiKey);
 
     // 启动事件驱动的前台窗口监听
     monitorService.Start();
@@ -33,7 +35,16 @@ try
     {
         var usages = monitorService.GetAndClearUsages();
         if (usages.Count > 0)
+        {
             await uploadService.UploadAsync(usages);
+
+            // 异步上传新应用的图标（不阻塞主上传流程）
+            var appNames = usages.Select(u => u.AppName).Distinct(StringComparer.OrdinalIgnoreCase);
+            foreach (var appName in appNames)
+            {
+                _ = iconService.EnsureIconUploadedAsync(appName);
+            }
+        }
     });
 
     await uploadService.UploadCachedAsync();

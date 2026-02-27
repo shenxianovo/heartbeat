@@ -5,15 +5,17 @@ namespace client.Services
 {
     public class ConfigService
     {
-        public Config LoadConfig(string configFilePath = "appsettings.json")
+        public Config LoadConfig()
         {
+            var env = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production";
+
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile(configFilePath, optional: true, reloadOnChange: true)
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                .AddJsonFile($"appsettings.{env}.json", optional: true, reloadOnChange: true)
                 .Build();
 
             return configuration.Get<Config>()!;
         }
-
     }
 }

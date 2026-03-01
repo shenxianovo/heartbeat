@@ -1,105 +1,21 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import type { AppSummary } from './types'
-import { fetchDevices, fetchUsage, getIconUrl } from './api'
-import type { AppUsage } from './types'
+import { useHeartbeat, formatDuration } from './composables/useHeartbeat'
+import { getIconUrl } from './api'
 
-function localDateStr(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-const devices = ref<string[]>([])
-const selectedDevice = ref('')
-const selectedDate = ref(localDateStr())
-const usageData = ref<AppUsage[]>([])
-const loading = ref(false)
-
-const appSummaries = computed<AppSummary[]>(() => {
-  const map = new Map<string, number>()
-  for (const u of usageData.value) {
-    map.set(u.appName, (map.get(u.appName) ?? 0) + u.durationSeconds)
-  }
-  return [...map.entries()]
-    .map(([appName, totalSeconds]) => ({ appName, totalSeconds }))
-    .sort((a, b) => b.totalSeconds - a.totalSeconds)
-})
-
-const totalSeconds = computed(() =>
-  appSummaries.value.reduce((s, a) => s + a.totalSeconds, 0)
-)
-
-const maxSeconds = computed(() =>
-  appSummaries.value[0]?.totalSeconds ?? 1
-)
-
-const lastActive = computed(() => {
-  if (usageData.value.length === 0) return null
-  const ms = Math.max(...usageData.value.map(u => new Date(u.endTime).getTime()))
-  return new Date(ms)
-})
-
-const isToday = computed(() =>
-  selectedDate.value === localDateStr()
-)
-
-const isAlive = computed(() => {
-  if (!isToday.value || !lastActive.value) return false
-  return Date.now() - lastActive.value.getTime() < 5 * 60 * 1000
-})
-
-const lastActiveStr = computed(() => {
-  if (!lastActive.value) return ''
-  return lastActive.value.toLocaleTimeString('zh-CN', {
-    hour: '2-digit', minute: '2-digit'
-  })
-})
-
-const activeHours = computed(() => {
-  const hours = new Set<number>()
-  for (const u of usageData.value) {
-    const s = new Date(u.startTime).getHours()
-    const e = new Date(u.endTime).getHours()
-    if (e >= s) {
-      for (let h = s; h <= e; h++) hours.add(h)
-    } else {
-      for (let h = s; h < 24; h++) hours.add(h)
-    }
-  }
-  return hours
-})
-
-function formatDuration(sec: number): string {
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m`
-  return '< 1m'
-}
-
-async function loadData() {
-  if (!selectedDevice.value) return
-  loading.value = true
-  try {
-    usageData.value = await fetchUsage(selectedDevice.value, selectedDate.value)
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(async () => {
-  devices.value = await fetchDevices()
-  if (devices.value.length > 0) {
-    selectedDevice.value = devices.value[0]
-  }
-})
-
-watch([selectedDevice, selectedDate], () => loadData())
-
-// 如果查看的是今天，每 30s 自动刷新
-setInterval(() => {
-  if (isToday.value) loadData()
-}, 30_000)
+const {
+  devices,
+  selectedDevice,
+  selectedDate,
+  loading,
+  isToday,
+  isAlive,
+  currentApp,
+  lastSeenStr,
+  appSummaries,
+  totalSeconds,
+  maxSeconds,
+  activeHours,
+} = useHeartbeat()
 </script>
 
 <template>
@@ -129,8 +45,8 @@ setInterval(() => {
           >
             {{ isToday ? (isAlive ? '还活着' : '似了喵') : '--' }}
           </span>
-          <span class="card-sub" v-if="lastActive && isToday">
-            最后活跃 {{ lastActiveStr }}
+          <span class="card-sub" v-if="lastSeenStr && isToday">
+            最后活跃 {{ lastSeenStr }}
           </span>
         </div>
         <div class="card">
@@ -152,6 +68,28 @@ setInterval(() => {
           <span class="card-sub" v-if="appSummaries[0]">
             沉迷时长 {{ formatDuration(appSummaries[0].totalSeconds) }}
           </span>
+        </div>
+      </section>
+
+      <!-- 当前使用 -->
+      <section class="panel current-app-panel" v-if="isToday">
+        <h2>当前使用</h2>
+        <div class="current-app" v-if="isAlive && currentApp">
+          <span class="current-dot alive"></span>
+          <img
+            :src="getIconUrl(currentApp)"
+            class="current-icon"
+            @error="($event.target as HTMLImageElement).style.display = 'none'"
+          />
+          <span class="current-name">{{ currentApp }}</span>
+        </div>
+        <div class="current-app offline" v-else-if="!isAlive">
+          <span class="current-dot"></span>
+          <span class="current-name dim">设备离线</span>
+        </div>
+        <div class="current-app" v-else>
+          <span class="current-dot alive"></span>
+          <span class="current-name dim">无前台应用</span>
         </div>
       </section>
 
@@ -356,6 +294,46 @@ setInterval(() => {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 1rem;
+}
+
+/* Current App Panel */
+.current-app {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+}
+
+.current-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #444;
+  flex-shrink: 0;
+}
+
+.current-dot.alive {
+  background: var(--alive);
+  box-shadow: 0 0 8px var(--alive);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.current-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.current-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.current-name.dim {
+  color: var(--text-dim);
+  font-weight: 400;
 }
 
 /* Timeline */

@@ -11,3 +11,9 @@ export interface AppSummary {
   appName: string
   totalSeconds: number
 }
+
+export interface DeviceStatus {
+  currentApp: string | null
+  lastSeen: string | null
+  isOnline: boolean
+}

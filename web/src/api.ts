@@ -1,4 +1,4 @@
-import type { AppUsage } from './types'
+import type { AppUsage, DeviceStatus } from './types'
 
 const BASE = import.meta.env.DEV
   ? '/api/v1'
@@ -10,24 +10,14 @@ export async function fetchDevices(): Promise<string[]> {
   return res.json()
 }
 
-export interface DeviceStatus {
-  currentApp: string | null
-  lastSeen: string | null
-  isOnline: boolean
-}
-
-export async function fetchDeviceStatus(
-  deviceName: string
-): Promise<DeviceStatus | null> {
+export async function fetchDeviceStatus(deviceName: string): Promise<DeviceStatus | null> {
   const res = await fetch(`${BASE}/devices/${encodeURIComponent(deviceName)}/status`)
   if (!res.ok) return null
   return res.json()
 }
 
-export async function fetchUsage(deviceName?: string, date?: string): Promise<AppUsage[]> {
-  const params = new URLSearchParams()
-  if (deviceName) params.set('deviceName', deviceName)
-  if (date) params.set('date', date)
+export async function fetchUsage(deviceName: string, date: string): Promise<AppUsage[]> {
+  const params = new URLSearchParams({ deviceName, date })
   const res = await fetch(`${BASE}/usage?${params}`)
   if (!res.ok) return []
   return res.json()

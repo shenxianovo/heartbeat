@@ -14,7 +14,7 @@ namespace client.Services
 
         public AppMonitorService()
         {
-            Log.Information("应用监测服务启动（事件驱动模式）");
+            Log.Information("应用监测服务启动");
         }
 
         /// <summary>

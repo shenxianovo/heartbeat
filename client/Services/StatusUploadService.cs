@@ -1,37 +1,25 @@
 ﻿using client.DTOs;
+using client.Models;
 using Serilog;
 using System.Net.Http.Json;
 
 namespace client.Services
 {
-    public class StatusUploadService
+    public class StatusUploadService(Config config, HttpClient httpClient)
     {
-        private readonly string _statusUrl;
-        private readonly string _apiKey;
-        private readonly HttpClient _client = new();
-
-        public StatusUploadService(string apiUrl, string apiKey, string deviceName)
-        {
-            // apiUrl: .../api/v1/usage -> .../api/v1/devices/{deviceName}/status
-            var baseUrl = apiUrl.TrimEnd('/').EndsWith("/usage", StringComparison.OrdinalIgnoreCase)
-                ? apiUrl[..apiUrl.LastIndexOf("/usage", StringComparison.OrdinalIgnoreCase)]
-                : apiUrl.TrimEnd('/');
-            _statusUrl = $"{baseUrl}/devices/{Uri.EscapeDataString(deviceName)}/status";
-            _apiKey = apiKey;
-            Log.Information("状态上传地址: {Url}", _statusUrl);
-        }
+        private readonly string _statusUrl = $"{config.ApiBaseUrl}/devices/{Uri.EscapeDataString(config.DeviceName)}/status";
 
         public async Task UploadAsync(string? currentApp)
         {
             var dto = new DeviceStatusRequest
             {
-                ApiKey = _apiKey,
+                ApiKey = config.ApiKey,
                 CurrentApp = currentApp ?? string.Empty
             };
 
             try
             {
-                var res = await _client.PostAsJsonAsync(_statusUrl, dto);
+                var res = await httpClient.PostAsJsonAsync(_statusUrl, dto);
                 if (!res.IsSuccessStatusCode)
                 {
                     var body = await res.Content.ReadAsStringAsync();

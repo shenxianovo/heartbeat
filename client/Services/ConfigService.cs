@@ -3,9 +3,9 @@ using Microsoft.Extensions.Configuration;
 
 namespace client.Services
 {
-    public class ConfigService
+    public static class ConfigService
     {
-        public Config LoadConfig()
+        public static Config Load()
         {
             var env = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production";
 

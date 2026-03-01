@@ -100,11 +100,6 @@ namespace server.Services
             return device == null || device.ApiKey == apiKey;
         }
 
-        public async Task<List<string>> GetDeviceNamesAsync()
-        {
-            return await _db.Devices.Select(x => x.DeviceName).ToListAsync();
-        }
-
         public async Task<List<AppUsage>> GetUsageAsync(string? deviceName, DateTimeOffset? date)
         {
             var query = _db.AppUsages.AsQueryable();

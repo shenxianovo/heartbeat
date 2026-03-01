@@ -26,11 +26,12 @@ try
     using var monitorService = new AppMonitorService();
     var uploadService = new UsageUploadService(config.ApiUrl, config.ApiKey, config.DeviceName, cache);
     var iconService = new IconUploadService(config.ApiUrl, config.ApiKey);
+    var statusService = new StatusUploadService(config.ApiUrl, config.ApiKey, config.DeviceName);
 
     // 启动事件驱动的前台窗口监听
     monitorService.Start();
 
-    // 定时上传
+    // 定时上传使用记录
     TimerHelper.RunEveryAsync(TimeSpan.FromMinutes(config.UploadIntervalMinutes), async () =>
     {
         var usages = monitorService.GetAndClearUsages();
@@ -45,6 +46,13 @@ try
                 _ = iconService.EnsureIconUploadedAsync(appName);
             }
         }
+    });
+
+    // 定时上传设备状态（每30秒）
+    TimerHelper.RunEveryAsync(TimeSpan.FromSeconds(5), async () =>
+    {
+        var currentApp = monitorService.GetCurrentApp();
+        await statusService.UploadAsync(currentApp);
     });
 
     await uploadService.UploadCachedAsync();

@@ -94,6 +94,17 @@ namespace client.Services
         }
 
         /// <summary>
+        /// 获取当前前台应用名称
+        /// </summary>
+        public string? GetCurrentApp()
+        {
+            lock (_lock)
+            {
+                return _currentApp;
+            }
+        }
+
+        /// <summary>
         /// 获取并清空已记录的使用数据（将当前活跃会话截断）
         /// </summary>
         public List<AppUsageItem> GetAndClearUsages()

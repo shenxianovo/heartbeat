@@ -4,9 +4,9 @@
  */
 const labels: Record<string, string> = {
     // 开发
-    'Code': '在写代码',
+    'Code': '在玩微软大战代码',
     'devenv': '在写代码',
-    'datagrip64': '在怼数据库',
+    'datagrip64': '在删库跑路',
 
     // 终端
     'WindowsTerminal': '在看终端',

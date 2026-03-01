@@ -10,6 +10,20 @@ export async function fetchDevices(): Promise<string[]> {
   return res.json()
 }
 
+export interface DeviceStatus {
+  currentApp: string | null
+  lastSeen: string | null
+  isOnline: boolean
+}
+
+export async function fetchDeviceStatus(
+  deviceName: string
+): Promise<DeviceStatus | null> {
+  const res = await fetch(`${BASE}/devices/${encodeURIComponent(deviceName)}/status`)
+  if (!res.ok) return null
+  return res.json()
+}
+
 export async function fetchUsage(deviceName?: string, date?: string): Promise<AppUsage[]> {
   const params = new URLSearchParams()
   if (deviceName) params.set('deviceName', deviceName)

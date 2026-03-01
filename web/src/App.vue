@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useHeartbeat, formatDuration } from './composables/useHeartbeat'
 import { getIconUrl } from './api'
+import { getAppLabel } from './appLabels'
 
 const {
   devices,
@@ -81,7 +82,10 @@ const {
             class="current-icon"
             @error="($event.target as HTMLImageElement).style.display = 'none'"
           />
-          <span class="current-name">{{ currentApp }}</span>
+          <div class="current-info">
+            <span class="current-name">{{ currentApp }}</span>
+            <span class="current-desc" v-if="getAppLabel(currentApp)">{{ getAppLabel(currentApp) }}</span>
+          </div>
         </div>
         <div class="current-app offline" v-else-if="!isAlive">
           <span class="current-dot"></span>
@@ -334,6 +338,17 @@ const {
 .current-name.dim {
   color: var(--text-dim);
   font-weight: 400;
+}
+
+.current-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.current-desc {
+  font-size: 0.8rem;
+  color: var(--text-dim);
 }
 
 /* Timeline */

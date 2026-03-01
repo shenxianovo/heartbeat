@@ -94,7 +94,13 @@ export function useHeartbeat() {
   onMounted(async () => {
     devices.value = await fetchDevices()
     if (devices.value.length > 0) {
-      selectedDevice.value = devices.value[0]
+      // 优先选择在线设备
+      let picked = devices.value[0]
+      for (const d of devices.value) {
+        const s = await fetchDeviceStatus(d)
+        if (s?.isOnline) { picked = d; break }
+      }
+      selectedDevice.value = picked
     }
 
     // 状态轮询：每 5 秒

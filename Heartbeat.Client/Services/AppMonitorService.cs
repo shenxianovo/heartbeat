@@ -1,9 +1,9 @@
-﻿using client.DTOs;
-using client.Utils;
+﻿using Heartbeat.Client.DTOs;
+using Heartbeat.Client.Utils;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
-namespace client.Services
+namespace Heartbeat.Client.Services
 {
     public class AppMonitorService : IHostedService, IDisposable
     {

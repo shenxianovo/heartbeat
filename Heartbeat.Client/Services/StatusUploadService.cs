@@ -1,9 +1,9 @@
-﻿using client.DTOs;
-using client.Models;
+﻿using Heartbeat.Client.DTOs;
+using Heartbeat.Client.Models;
 using Serilog;
 using System.Net.Http.Json;
 
-namespace client.Services
+namespace Heartbeat.Client.Services
 {
     public class StatusUploadService(Config config, HttpClient httpClient)
     {

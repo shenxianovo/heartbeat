@@ -1,10 +1,10 @@
-﻿using client.DTOs;
-using client.Models;
-using client.Storage;
+﻿using Heartbeat.Client.DTOs;
+using Heartbeat.Client.Models;
+using Heartbeat.Client.Storage;
 using Serilog;
 using System.Net.Http.Json;
 
-namespace client.Services
+namespace Heartbeat.Client.Services
 {
     public class UsageUploadService(Config config, HttpClient httpClient, LocalCache cache)
     {

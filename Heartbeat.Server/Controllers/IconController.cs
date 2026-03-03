@@ -1,9 +1,9 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using server.Data;
-using server.Entities;
+using Heartbeat.Server.Data;
+using Heartbeat.Server.Entities;
 
-namespace server.Controllers
+namespace Heartbeat.Server.Controllers
 {
     [ApiController]
     [Route("api/v1/icons")]

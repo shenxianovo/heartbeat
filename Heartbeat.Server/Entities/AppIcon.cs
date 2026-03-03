@@ -1,4 +1,4 @@
-namespace server.Entities
+﻿namespace Heartbeat.Server.Entities
 {
     public class AppIcon
     {

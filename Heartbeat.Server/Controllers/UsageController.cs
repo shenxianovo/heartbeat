@@ -1,8 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using server.DTOs;
-using server.Services;
+using Heartbeat.Server.DTOs;
+using Heartbeat.Server.Services;
 
-namespace server.Controllers
+namespace Heartbeat.Server.Controllers
 {
     [ApiController]
     [Route("api/v1/usage")]

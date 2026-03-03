@@ -1,9 +1,9 @@
-using client.Models;
-using client.Services;
+﻿using Heartbeat.Client.Models;
+using Heartbeat.Client.Services;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
-namespace client.Workers
+namespace Heartbeat.Client.Workers
 {
     public class UsageUploadWorker(
         AppMonitorService monitor,

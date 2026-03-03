@@ -4,11 +4,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using server.Data;
+using Heartbeat.Server.Data;
 
 #nullable disable
 
-namespace server.Migrations
+namespace Heartbeat.Server.Migrations
 {
     [DbContext(typeof(AppDbContext))]
     partial class AppDbContextModelSnapshot : ModelSnapshot
@@ -22,7 +22,7 @@ namespace server.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("server.Entities.AppIcon", b =>
+            modelBuilder.Entity("Heartbeat.Server.Entities.AppIcon", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
@@ -49,7 +49,7 @@ namespace server.Migrations
                     b.ToTable("AppIcons");
                 });
 
-            modelBuilder.Entity("server.Entities.AppUsage", b =>
+            modelBuilder.Entity("Heartbeat.Server.Entities.AppUsage", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
@@ -85,7 +85,7 @@ namespace server.Migrations
                     b.ToTable("AppUsages");
                 });
 
-            modelBuilder.Entity("server.Entities.Device", b =>
+            modelBuilder.Entity("Heartbeat.Server.Entities.Device", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()

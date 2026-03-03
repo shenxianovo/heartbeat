@@ -1,7 +1,7 @@
-﻿using client.DTOs;
+﻿using Heartbeat.Client.DTOs;
 using System.Text.Json;
 
-namespace client.Storage
+namespace Heartbeat.Client.Storage
 {
     public class LocalCache
     {

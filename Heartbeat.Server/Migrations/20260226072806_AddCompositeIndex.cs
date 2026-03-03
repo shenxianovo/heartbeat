@@ -2,7 +2,7 @@
 
 #nullable disable
 
-namespace server.Migrations
+namespace Heartbeat.Server.Migrations
 {
     /// <inheritdoc />
     public partial class AddCompositeIndex : Migration

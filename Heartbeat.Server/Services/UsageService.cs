@@ -1,9 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using server.Data;
-using server.DTOs;
-using server.Entities;
+using Heartbeat.Server.Data;
+using Heartbeat.Server.DTOs;
+using Heartbeat.Server.Entities;
 
-namespace server.Services
+namespace Heartbeat.Server.Services
 {
     public class UsageService(AppDbContext db)
     {

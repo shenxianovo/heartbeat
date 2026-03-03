@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>6240e809-304f-4f5a-a44e-4e4eff89915b</UserSecretsId>
+    <RootNamespace>Heartbeat.Server</RootNamespace>
+    <AssemblyName>Heartbeat.Server</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

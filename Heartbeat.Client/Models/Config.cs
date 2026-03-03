@@ -1,4 +1,4 @@
-﻿namespace client.Models
+﻿namespace Heartbeat.Client.Models
 {
     public class Config
     {

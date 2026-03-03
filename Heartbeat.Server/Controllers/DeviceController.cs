@@ -1,9 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
-using server.Data;
-using server.DTOs;
+using Heartbeat.Server.Data;
+using Heartbeat.Server.DTOs;
 
-namespace server.Controllers
+namespace Heartbeat.Server.Controllers
 {
     [Route("api/v1/devices")]
     public class DeviceController(AppDbContext db) : ControllerBase

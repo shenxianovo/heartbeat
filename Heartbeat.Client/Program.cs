@@ -1,7 +1,7 @@
-﻿using client.Models;
-using client.Services;
-using client.Storage;
-using client.Workers;
+﻿using Heartbeat.Client.Models;
+using Heartbeat.Client.Services;
+using Heartbeat.Client.Storage;
+using Heartbeat.Client.Workers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;

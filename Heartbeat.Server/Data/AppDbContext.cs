@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using server.Entities;
+using Heartbeat.Server.Entities;
 
-namespace server.Data
+namespace Heartbeat.Server.Data
 {
     public class AppDbContext : DbContext
     {

@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace client.Utils
+namespace Heartbeat.Client.Utils
 {
     public static class ActiveWindowHelper
     {

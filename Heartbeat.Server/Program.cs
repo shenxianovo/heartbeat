@@ -1,6 +1,6 @@
-using Microsoft.EntityFrameworkCore;
-using server.Data;
-using server.Services;
+﻿using Microsoft.EntityFrameworkCore;
+using Heartbeat.Server.Data;
+using Heartbeat.Server.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 

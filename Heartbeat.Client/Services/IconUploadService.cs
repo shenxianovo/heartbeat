@@ -1,8 +1,8 @@
-using client.Models;
-using client.Utils;
+﻿using Heartbeat.Client.Models;
+using Heartbeat.Client.Utils;
 using Serilog;
 
-namespace client.Services
+namespace Heartbeat.Client.Services
 {
     public class IconUploadService(Config config, HttpClient httpClient)
     {

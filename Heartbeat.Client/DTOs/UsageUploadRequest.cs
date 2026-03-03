@@ -1,4 +1,4 @@
-﻿namespace client.DTOs
+﻿namespace Heartbeat.Client.DTOs
 {
     public class UsageUploadRequest
     {

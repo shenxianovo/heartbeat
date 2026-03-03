@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace server.Migrations
+namespace Heartbeat.Server.Migrations
 {
     /// <inheritdoc />
     public partial class AddStatusFields : Migration

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/desktop/">
+    <Project Path="desktop/Heartbeat.Client/Heartbeat.Client.csproj" />
+  </Folder>
+  <Folder Name="/server/">
+    <Project Path="server/Heartbeat.Server/Heartbeat.Server.csproj" />
+  </Folder>
+</Solution>

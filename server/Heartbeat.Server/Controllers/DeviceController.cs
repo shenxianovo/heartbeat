@@ -16,36 +16,36 @@ namespace Heartbeat.Server.Controllers
             return await _db.Devices.Select(x => x.DeviceName).ToListAsync();
         }
 
-            [HttpGet("/api/v1/devices/{deviceName}/status")]
-            public async Task<IActionResult> GetStatus([FromRoute] string deviceName)
-            {
-                var device = await _db.Devices
-                    .Where(d => d.DeviceName == deviceName)
-                    .Select(d => new DeviceStatusResponse
-                    {
-                        CurrentApp = d.CurrentApp,
-                        LastSeen = d.LastSeen
-                    })
-                    .FirstOrDefaultAsync();
+        [HttpGet("/api/v1/devices/{deviceName}/status")]
+        public async Task<IActionResult> GetStatus([FromRoute] string deviceName)
+        {
+            var device = await _db.Devices
+                .Where(d => d.DeviceName == deviceName)
+                .Select(d => new DeviceStatusResponse
+                {
+                    CurrentApp = d.CurrentApp,
+                    LastSeen = d.LastSeen
+                })
+                .FirstOrDefaultAsync();
 
-                if (device == null) return NotFound();
+            if (device == null) return NotFound();
 
-                return Ok(device);
-            }
+            return Ok(device);
+        }
 
-            [HttpPost("/api/v1/devices/{deviceName}/status")]
-            public async Task<IActionResult> UpdateStatus(
-                [FromRoute] string deviceName,
-                [FromBody] DeviceStatusRequest status)
-            {
-                var device = await _db.Devices.FirstOrDefaultAsync(x => x.DeviceName == deviceName);
+        [HttpPost("/api/v1/devices/{deviceName}/status")]
+        public async Task<IActionResult> UpdateStatus(
+            [FromRoute] string deviceName,
+            [FromBody] DeviceStatusRequest status)
+        {
+            var device = await _db.Devices.FirstOrDefaultAsync(x => x.DeviceName == deviceName);
 
-                if (device == null) return NotFound();
-                device.CurrentApp = status.CurrentApp;
-                device.LastSeen = DateTimeOffset.UtcNow;
+            if (device == null) return NotFound();
+            device.CurrentApp = status.CurrentApp;
+            device.LastSeen = DateTimeOffset.UtcNow;
 
-                await _db.SaveChangesAsync();
-                return NoContent();
-            }
+            await _db.SaveChangesAsync();
+            return NoContent();
+        }
     }
 }

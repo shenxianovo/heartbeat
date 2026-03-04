@@ -5,7 +5,7 @@ import { getIconUrl } from './api'
 import { getAppLabel } from './appLabels'
 
 /** 排行榜默认可见数量（超出部分滚动查看） */
-const VISIBLE_RANK_COUNT = 6
+const VISIBLE_RANK_COUNT = 3
 /** 环形图最多显示的应用数（超出归入"其他"） */
 const DONUT_MAX_ITEMS = 10
 const CIRCUMFERENCE = 2 * Math.PI * 70

@@ -10,12 +10,10 @@ namespace Heartbeat.Client.Services
     {
         private readonly string _uploadUrl = $"{config.ApiBaseUrl}/usage";
 
-        private UsageUploadRequest MapToDto(List<AppUsageItem> items)
+        private static UsageUploadRequest MapToDto(List<AppUsageItem> items)
         {
             return new UsageUploadRequest
             {
-                DeviceName = config.DeviceName,
-                ApiKey = config.ApiKey,
                 Usages = items.ConvertAll(i => new AppUsageItem
                 {
                     AppName = i.AppName,

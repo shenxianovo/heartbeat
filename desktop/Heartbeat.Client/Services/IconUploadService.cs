@@ -48,7 +48,6 @@ namespace Heartbeat.Client.Services
                 Log.Debug("正在上传图标: {App}，大小 {Size} bytes", appName, iconData.Length);
                 var request = new IconUploadRequest
                 {
-                    ApiKey = config.ApiKey,
                     IconData = iconData
                 };
 

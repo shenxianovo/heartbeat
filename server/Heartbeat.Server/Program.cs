@@ -1,4 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.EntityFrameworkCore;
+using Heartbeat.Server.Authentication;
 using Heartbeat.Server.Data;
 using Heartbeat.Server.Services;
 
@@ -10,6 +12,9 @@ builder.Services.AddDbContext<AppDbContext>(o =>
 );
 builder.Services.AddScoped<UsageService>();
 
+builder.Services.AddAuthentication(ApiKeyDefaults.Scheme)
+    .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyDefaults.Scheme, null);
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
@@ -18,6 +23,7 @@ using (var scope = app.Services.CreateScope())
     db.Database.Migrate();
 }
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();

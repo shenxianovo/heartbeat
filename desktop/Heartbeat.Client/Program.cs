@@ -27,12 +27,18 @@ try
 
     Log.Information("Heartbeat 客户端启动，环境: {Env}", builder.Environment.EnvironmentName);
     Log.Information("Base URL: {URL}", config.ApiBaseUrl);
-    Log.Information("配置加载完成 - 设备: {Device}, 上传间隔: {Upload}min, 状态间隔: {Status}s",
-        config.DeviceName, config.UploadIntervalMinutes, config.StatusUploadIntervalSeconds);
+    Log.Information("配置加载完成 - 上传间隔: {Upload}min, 状态间隔: {Status}s",
+        config.UploadIntervalMinutes, config.StatusUploadIntervalSeconds);
 
     // 基础设施服务
     builder.Services.AddSingleton<LocalCache>(_ => new LocalCache("cache.json"));
-    builder.Services.AddSingleton<HttpClient>();
+    builder.Services.AddSingleton(_ =>
+    {
+        var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("ApiKey", config.ApiKey);
+        return client;
+    });
 
     // 业务服务
     builder.Services.AddSingleton<AppMonitorService>();

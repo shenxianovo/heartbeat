@@ -24,20 +24,11 @@ namespace Heartbeat.Server.Services
         /// </summary>
         private static readonly TimeSpan MaxDuration = TimeSpan.FromHours(24);
 
-        public async Task SaveUsageAsync(UsageUploadRequest request)
+        public async Task SaveUsageAsync(string deviceName, UsageUploadRequest request)
         {
-            var device = await _db.Devices.FirstOrDefaultAsync(x => x.DeviceName == request.DeviceName);
+            var device = await _db.Devices.FirstOrDefaultAsync(x => x.DeviceName == deviceName);
 
-            if (device == null)
-            {
-                device = new Device
-                {
-                    DeviceName = request.DeviceName,
-                    ApiKey = request.ApiKey,
-                };
-
-                _db.Devices.Add(device);
-            }
+            if (device == null) return;
 
             var now = DateTimeOffset.UtcNow;
 
@@ -93,12 +84,6 @@ namespace Heartbeat.Server.Services
             await _db.SaveChangesAsync();
         }
 
-        public async Task<bool> ValidateApiKeyAsync(string deviceName, string apiKey)
-        {
-            var device = await _db.Devices.FirstOrDefaultAsync(x => x.DeviceName == deviceName);
-            // 新设备允许注册，已有设备必须匹配 ApiKey
-            return device == null || device.ApiKey == apiKey;
-        }
 
         public async Task<List<AppUsage>> GetUsageAsync(string? deviceName, DateTimeOffset? date)
         {

@@ -2,8 +2,6 @@
 {
     public class UsageUploadRequest
     {
-        public string DeviceName { get; set; } = string.Empty;
-        public string ApiKey { get; set; } = string.Empty;
         public List<AppUsageItem> Usages { get; set; } = [];
     }
 

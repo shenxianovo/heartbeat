@@ -7,13 +7,12 @@ namespace Heartbeat.Client.Services
 {
     public class StatusUploadService(Config config, HttpClient httpClient)
     {
-        private readonly string _statusUrl = $"{config.ApiBaseUrl}/devices/{Uri.EscapeDataString(config.DeviceName)}/status";
+        private readonly string _statusUrl = $"{config.ApiBaseUrl}/devices/status";
 
         public async Task UploadAsync(string? currentApp)
         {
             var dto = new DeviceStatusRequest
             {
-                ApiKey = config.ApiKey,
                 CurrentApp = currentApp ?? string.Empty
             };
 

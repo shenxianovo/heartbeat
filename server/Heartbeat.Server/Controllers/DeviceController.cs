@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Heartbeat.Server.Data;
 using Heartbeat.Core.DTOs;
 
@@ -16,7 +17,7 @@ namespace Heartbeat.Server.Controllers
             return await _db.Devices.Select(x => x.DeviceName).ToListAsync();
         }
 
-        [HttpGet("/api/v1/devices/{deviceName}/status")]
+        [HttpGet("{deviceName}/status")]
         public async Task<IActionResult> GetStatus([FromRoute] string deviceName)
         {
             var device = await _db.Devices
@@ -33,11 +34,12 @@ namespace Heartbeat.Server.Controllers
             return Ok(device);
         }
 
-        [HttpPost("/api/v1/devices/{deviceName}/status")]
+        [Authorize]
+        [HttpPost("status")]
         public async Task<IActionResult> UpdateStatus(
-            [FromRoute] string deviceName,
             [FromBody] DeviceStatusRequest status)
         {
+            var deviceName = User.Identity!.Name!;
             var device = await _db.Devices.FirstOrDefaultAsync(x => x.DeviceName == deviceName);
 
             if (device == null) return NotFound();

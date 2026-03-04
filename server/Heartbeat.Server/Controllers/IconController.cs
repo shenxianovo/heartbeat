@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Heartbeat.Server.Data;
 using Heartbeat.Server.Entities;
@@ -31,6 +32,7 @@ namespace Heartbeat.Server.Controllers
         /// <summary>
         /// 上传应用图标（幂等，已有则覆盖）
         /// </summary>
+        [Authorize]
         [HttpPost("{appName}")]
         public async Task<IActionResult> Upload(string appName, [FromBody] IconUploadRequest request)
         {

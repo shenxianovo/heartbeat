@@ -6,16 +6,13 @@ using Heartbeat.Core.DTOs;
 
 namespace Heartbeat.Server.Controllers
 {
-    /// <summary>
-    /// 客户端上传使用数据
-    /// </summary>
     [ApiController]
-    [Authorize]
     [Route("api/v1/usage")]
     public class UsageController(UsageService service) : ControllerBase
     {
         private readonly UsageService _service = service;
 
+        [Authorize]
         [HttpPost]
         public async Task<IActionResult> Upload([FromBody] UsageUploadRequest request)
         {
@@ -25,6 +22,16 @@ namespace Heartbeat.Server.Controllers
             var deviceId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
             await _service.SaveUsageAsync(deviceId, request);
             return Ok();
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetUsage(
+            [FromQuery] long? deviceId,
+            [FromQuery] DateTimeOffset? start,
+            [FromQuery] DateTimeOffset? end)
+        {
+            var result = await _service.GetUsageAsync(deviceId, start, end);
+            return Ok(result);
         }
     }
 }

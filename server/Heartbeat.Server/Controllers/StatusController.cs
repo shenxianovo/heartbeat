@@ -12,7 +12,7 @@ namespace Heartbeat.Server.Controllers
     /// </summary>
     [ApiController]
     [Authorize]
-    [Route("api/v1/status")]
+    [Route("api/v1/devices/heartbeat")]
     public class StatusController(AppDbContext db) : ControllerBase
     {
         private readonly AppDbContext _db = db;

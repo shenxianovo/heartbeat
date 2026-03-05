@@ -11,6 +11,7 @@ builder.Services.AddDbContext<AppDbContext>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
 );
 builder.Services.AddScoped<UsageService>();
+builder.Services.AddScoped<ReportService>();
 
 builder.Services.AddAuthentication(ApiKeyDefaults.Scheme)
     .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyDefaults.Scheme, null);

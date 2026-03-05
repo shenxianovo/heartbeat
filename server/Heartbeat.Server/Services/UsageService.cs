@@ -96,21 +96,20 @@ namespace Heartbeat.Server.Services
             await _db.SaveChangesAsync();
         }
 
-        public async Task<List<AppUsageResponse>> GetUsageAsync(long deviceId, DateTimeOffset? date)
+        public async Task<List<AppUsageResponse>> GetUsageAsync(long? deviceId, DateTimeOffset? start, DateTimeOffset? end)
         {
             var query = _db.AppUsages
                 .Include(x => x.App)
-                .Where(x => x.DeviceId == deviceId);
+                .AsQueryable();
 
-            if (date.HasValue)
-            {
-                var start = new DateTimeOffset(date.Value.Date, TimeSpan.Zero);
-                var end = start.AddDays(1);
+            if (deviceId.HasValue)
+                query = query.Where(x => x.DeviceId == deviceId.Value);
 
-                query = query.Where(x =>
-                    x.StartTime >= start &&
-                    x.StartTime < end);
-            }
+            if (start.HasValue)
+                query = query.Where(x => x.StartTime >= start.Value);
+
+            if (end.HasValue)
+                query = query.Where(x => x.StartTime < end.Value);
 
             return await query
                 .OrderByDescending(x => x.StartTime)

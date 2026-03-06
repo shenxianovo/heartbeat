@@ -10,7 +10,7 @@ namespace Heartbeat.Server.Services
 
         public async Task<DailyReportResponse> GetDailyReportAsync(long? deviceId, DateTimeOffset date)
         {
-            var dayStart = new DateTimeOffset(date.Date, TimeSpan.Zero);
+            var dayStart = new DateTimeOffset(date.Date, date.Offset);
             var dayEnd = dayStart.AddDays(1);
 
             var query = _db.AppUsages
@@ -45,8 +45,8 @@ namespace Heartbeat.Server.Services
             var monday = d.AddDays(mondayOffset);
             var sundayEnd = monday.AddDays(7);
 
-            var weekStart = new DateTimeOffset(monday, TimeSpan.Zero);
-            var weekEnd = new DateTimeOffset(sundayEnd, TimeSpan.Zero);
+            var weekStart = new DateTimeOffset(monday, date.Offset);
+            var weekEnd = new DateTimeOffset(sundayEnd, date.Offset);
 
             var query = _db.AppUsages
                 .Where(x => x.StartTime >= weekStart && x.StartTime < weekEnd);

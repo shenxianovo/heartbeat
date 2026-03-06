@@ -1,6 +1,6 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { AppInfoResponse, AppUsageResponse, AppSummary, DeviceInfoResponse, DeviceStatusResponse, DailyReportResponse, WeeklyReportResponse } from '../api/index'
-import { fetchDevices, fetchApps, fetchUsage, fetchDeviceStatus, fetchDailyReport, fetchWeeklyReport } from '../api/index'
+import { fetchDevices, fetchApps, fetchUsage, fetchDeviceStatus, fetchDailyReport, fetchWeeklyReport, getTimezoneLabel } from '../api/index'
 
 function todayStr(): string {
   const d = new Date()
@@ -97,6 +97,8 @@ export function useHeartbeat() {
 
   const weeklyTotalSeconds = computed(() => weeklyReport.value?.totalSeconds ?? 0)
 
+  const timezoneLabel = getTimezoneLabel()
+
   async function loadUsage() {
     if (!selectedDevice.value) return
     const dateObj = new Date(selectedDate.value + 'T00:00:00')
@@ -152,7 +154,7 @@ export function useHeartbeat() {
 
     usageTimer = setInterval(() => {
       if (isToday.value) {
-        loadUsage()
+        // loadUsage()
         loadDailyReport()
         loadWeeklyReport()
       }
@@ -183,5 +185,6 @@ export function useHeartbeat() {
     activeHours,
     weeklyAppSummaries,
     weeklyTotalSeconds,
+    timezoneLabel,
   }
 }

@@ -30,6 +30,7 @@ const {
   activeHours,
   weeklyAppSummaries,
   weeklyTotalSeconds,
+  timezoneLabel,
 } = useHeartbeat()
 
 const hoveredSegment = ref<number | null>(null)
@@ -75,6 +76,7 @@ const donutSegments = computed(() => {
       </div>
       <span class="card-label">你在视奸我，对吧！</span>
       <div class="controls">
+        <span class="tz-badge" :title="'数据按浏览器所在时区的日期展示，不代表设备所在时区'">{{ timezoneLabel }}</span>
         <select v-model="selectedDevice" class="ctl">
           <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option>
         </select>
@@ -344,6 +346,20 @@ const donutSegments = computed(() => {
 
 .ctl:focus {
   border-color: var(--accent);
+}
+
+.tz-badge {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  cursor: help;
+  user-select: none;
 }
 
 /* Cards */

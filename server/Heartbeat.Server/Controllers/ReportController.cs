@@ -1,3 +1,4 @@
+using Heartbeat.Core.DTOs.Reports;
 using Heartbeat.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,6 +11,7 @@ namespace Heartbeat.Server.Controllers
         private readonly ReportService _reportService = reportService;
 
         [HttpGet("daily")]
+        [ProducesResponseType(typeof(DailyReportResponse), 200)]
         public async Task<IActionResult> GetDailyReport(
             [FromQuery] long? deviceId,
             [FromQuery] DateTimeOffset? date)
@@ -20,6 +22,7 @@ namespace Heartbeat.Server.Controllers
         }
 
         [HttpGet("weekly")]
+        [ProducesResponseType(typeof(WeeklyReportResponse), 200)]
         public async Task<IActionResult> GetWeeklyReport(
             [FromQuery] long? deviceId,
             [FromQuery] DateTimeOffset? date)

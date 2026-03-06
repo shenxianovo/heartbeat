@@ -26,6 +26,7 @@ namespace Heartbeat.Server.Controllers
         }
 
         [HttpGet("{deviceId:long}")]
+        [ProducesResponseType(typeof(DeviceStatusResponse), 200)]
         public async Task<IActionResult> GetDevice([FromRoute] long deviceId)
         {
             var device = await _db.Devices

@@ -1,4 +1,5 @@
 ﻿using Heartbeat.Core.DTOs;
+using Heartbeat.Core.DTOs.Apps;
 using Heartbeat.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -25,6 +26,7 @@ namespace Heartbeat.Server.Controllers
         }
 
         [HttpGet]
+        [ProducesResponseType(typeof(List<AppUsageResponse>), 200)]
         public async Task<IActionResult> GetUsage(
             [FromQuery] long? deviceId,
             [FromQuery] DateTimeOffset? start,

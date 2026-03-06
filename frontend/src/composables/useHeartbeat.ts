@@ -1,6 +1,6 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import type { AppInfo, AppUsage, AppSummary, DeviceInfo, DeviceStatus, DailyReport, WeeklyReport } from '../types'
-import { fetchDevices, fetchApps, fetchUsage, fetchDeviceStatus, fetchDailyReport, fetchWeeklyReport } from '../api'
+import type { AppInfoResponse, AppUsageResponse, AppSummary, DeviceInfoResponse, DeviceStatusResponse, DailyReportResponse, WeeklyReportResponse } from '../api/index'
+import { fetchDevices, fetchApps, fetchUsage, fetchDeviceStatus, fetchDailyReport, fetchWeeklyReport } from '../api/index'
 
 function todayStr(): string {
   const d = new Date()
@@ -16,19 +16,19 @@ export function formatDuration(sec: number): string {
 }
 
 export function useHeartbeat() {
-  const devices = ref<DeviceInfo[]>([])
-  const apps = ref<AppInfo[]>([])
+  const devices = ref<DeviceInfoResponse[]>([])
+  const apps = ref<AppInfoResponse[]>([])
   const selectedDevice = ref(0)
   const selectedDate = ref(todayStr())
-  const usageData = ref<AppUsage[]>([])
-  const deviceStatus = ref<DeviceStatus | null>(null)
-  const dailyReport = ref<DailyReport | null>(null)
-  const weeklyReport = ref<WeeklyReport | null>(null)
+  const usageData = ref<AppUsageResponse[]>([])
+  const deviceStatus = ref<DeviceStatusResponse | null>(null)
+  const dailyReport = ref<DailyReportResponse | null>(null)
+  const weeklyReport = ref<WeeklyReportResponse | null>(null)
   const loading = ref(false)
 
   const appNameMap = computed(() => {
     const map = new Map<number, string>()
-    for (const app of apps.value) map.set(app.id, app.name)
+    for (const app of apps.value) map.set(app.id!, app.name!)
     return map
   })
 
@@ -53,16 +53,16 @@ export function useHeartbeat() {
   const lastSeenStr = computed(() => {
     const raw = deviceStatus.value?.lastSeen
     if (!raw) return ''
-    return new Date(raw).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    return raw.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   })
 
   const appSummaries = computed<AppSummary[]>(() => {
-    if (!dailyReport.value) return []
+    if (!dailyReport.value?.apps) return []
     return dailyReport.value.apps
       .map(a => ({
-        appId: a.appId,
-        appName: appNameMap.value.get(a.appId) ?? `App ${a.appId}`,
-        totalSeconds: a.durationSeconds,
+        appId: a.appId!,
+        appName: appNameMap.value.get(a.appId!) ?? `App ${a.appId}`,
+        totalSeconds: a.durationSeconds!,
       }))
       .sort((a, b) => b.totalSeconds - a.totalSeconds)
   })
@@ -73,8 +73,8 @@ export function useHeartbeat() {
   const activeHours = computed(() => {
     const hours = new Set<number>()
     for (const u of usageData.value) {
-      const s = new Date(u.startTime).getHours()
-      const e = new Date(u.endTime).getHours()
+      const s = u.startTime!.getHours()
+      const e = u.endTime!.getHours()
       if (e >= s) {
         for (let h = s; h <= e; h++) hours.add(h)
       } else {
@@ -85,12 +85,12 @@ export function useHeartbeat() {
   })
 
   const weeklyAppSummaries = computed<AppSummary[]>(() => {
-    if (!weeklyReport.value) return []
+    if (!weeklyReport.value?.apps) return []
     return weeklyReport.value.apps
       .map(a => ({
-        appId: a.appId,
-        appName: appNameMap.value.get(a.appId) ?? `App ${a.appId}`,
-        totalSeconds: a.durationSeconds,
+        appId: a.appId!,
+        appName: appNameMap.value.get(a.appId!) ?? `App ${a.appId}`,
+        totalSeconds: a.durationSeconds!,
       }))
       .sort((a, b) => b.totalSeconds - a.totalSeconds)
   })
@@ -138,10 +138,10 @@ export function useHeartbeat() {
     apps.value = appList
 
     if (devices.value.length > 0) {
-      let picked = devices.value[0].id
+      let picked = devices.value[0].id!
       for (const d of devices.value) {
-        const s = await fetchDeviceStatus(d.id)
-        if (s?.isOnline) { picked = d.id; break }
+        const s = await fetchDeviceStatus(d.id!)
+        if (s?.isOnline) { picked = d.id!; break }
       }
       selectedDevice.value = picked
     }

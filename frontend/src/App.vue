@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useHeartbeat, formatDuration } from './composables/useHeartbeat'
-import { getIconUrl } from './api'
+import { getIconUrl } from './api/index'
 import { getAppLabel } from './appLabels'
 
 /** 排行榜默认可见数量（超出部分滚动查看） */

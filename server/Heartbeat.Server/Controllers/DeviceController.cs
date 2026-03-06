@@ -1,7 +1,9 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Mvc;
+﻿using Heartbeat.Core.DTOs;
 using Heartbeat.Server.Data;
-using Heartbeat.Core.DTOs;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace Heartbeat.Server.Controllers
 {
@@ -38,6 +40,22 @@ namespace Heartbeat.Server.Controllers
 
             if (device == null) return NotFound();
             return Ok(device);
+        }
+
+        [Authorize]
+        [HttpPost("heartbeat")]
+        public async Task<IActionResult> Upload([FromBody] DeviceStatusRequest status)
+        {
+            var deviceId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var device = await _db.Devices.FindAsync(deviceId);
+
+            if (device == null) return NotFound();
+
+            device.CurrentApp = status.CurrentApp;
+            device.LastSeen = DateTimeOffset.UtcNow;
+
+            await _db.SaveChangesAsync();
+            return NoContent();
         }
     }
 }

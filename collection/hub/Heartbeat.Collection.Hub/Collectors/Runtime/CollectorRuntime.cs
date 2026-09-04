@@ -99,6 +99,12 @@ internal static class CollectorRuntimeTimeout
 /// </summary>
 public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
 {
+    /// <summary>
+    /// Runtime 拥有的默认 Instance 的保留 InstanceKey。它是 Runtime 的内部约定，不是任何 Collector
+    /// 可以自己声明的名字，因此宿主侧不会因为某个具体产品而多出一个 Instance 命名规则。
+    /// </summary>
+    public const string DefaultInstanceKey = "default";
+
     private const long MaxSafeJsonInteger = 9_007_199_254_740_991;
     private readonly object _gate = new();
     private readonly JsonCollectorRuntimeStore _store;
@@ -118,7 +124,6 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
         ISegmentSink segmentSink,
         CollectorRuntimeOptions options,
         CollectorRuntimeState state,
-        ICollectorAppHintResolver? appHintResolver,
         IInputEventFactSink? inputEventSink,
         ICollectorSecretStore? secretStore,
         string instanceDataRoot)
@@ -130,7 +135,7 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
         _instanceDataRoot = instanceDataRoot;
         _options = options;
         _state = state;
-        _segmentProjector = new ActivitySegmentFactProjector(appHintResolver);
+        _segmentProjector = new ActivitySegmentFactProjector();
         _eventProjectors = [new InputEventFactProjector()];
     }
 
@@ -138,7 +143,6 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
         string stateFilePath,
         ISegmentSink segmentSink,
         CollectorRuntimeOptions? options = null,
-        ICollectorAppHintResolver? appHintResolver = null,
         IInputEventFactSink? inputEventSink = null,
         ICollectorSecretStore? secretStore = null)
     {
@@ -156,7 +160,6 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
                 segmentSink,
                 options,
                 state,
-                appHintResolver,
                 inputEventSink,
                 secretStore,
                 Path.Combine(Path.GetDirectoryName(Path.GetFullPath(stateFilePath))!, "collector-data"));
@@ -184,11 +187,6 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
         lock (_gate)
         {
             ThrowIfDisposed();
-            var instanceId = _options.IdGenerator();
-            if (!IsUuidV7(instanceId))
-                throw new InvalidOperationException("Collector Runtime ID generator must return a UUIDv7.");
-            if (_state.Instances.Any(instance => instance.CollectorInstanceId == instanceId))
-                throw new InvalidOperationException($"Collector Instance '{instanceId}' already exists.");
             if (instanceKey is not null && _state.Instances.Any(instance =>
                     instance.PackageId == package.Manifest.PackageId &&
                     instance.SubjectId == subject.SubjectId &&
@@ -196,6 +194,21 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
                     instance.InstanceKey == instanceKey))
                 throw new InvalidOperationException(
                     $"Collector Instance key '{instanceKey}' already exists for this Package and Subject.");
+            return CreateInstanceLocked(package, subject, spec, instanceKey);
+        }
+    }
+
+    private CollectorInstance CreateInstanceLocked(
+        LocalCollectorPackage package,
+        SubjectReference subject,
+        CollectorInstanceSpec spec,
+        string? instanceKey)
+    {
+            var instanceId = _options.IdGenerator();
+            if (!IsUuidV7(instanceId))
+                throw new InvalidOperationException("Collector Runtime ID generator must return a UUIDv7.");
+            if (_state.Instances.Any(instance => instance.CollectorInstanceId == instanceId))
+                throw new InvalidOperationException($"Collector Instance '{instanceId}' already exists.");
 
             var instanceState = new CollectorInstanceState
             {
@@ -215,7 +228,6 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
             _store.Save(next);
             _state = next;
             return ToPublic(instanceState);
-        }
     }
 
     public CollectorInstance GetInstance(Guid collectorInstanceId)
@@ -260,35 +272,52 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
                     "Collector Instance cannot be removed while an Activation is starting.");
             activation = _managedProcessActivations.Values.SingleOrDefault(
                 candidate => candidate.CollectorInstanceId == collectorInstanceId);
-            if (activation is null && HasProtocolActivationLocked(collectorInstanceId))
+            if (activation is null && HasInProcessActivationLocked(collectorInstanceId))
                 throw new InvalidOperationException(
-                    "Collector Instance has an active non-ManagedProcess Activation.");
+                    "Collector Instance has an active InProcess Activation.");
+            // 先立围栏：卸载过程中不再接受新的 activation.hello，避免刚停掉一个 External Host 又接进来
+            // 一个新的。围栏在卸载成功（Instance 消失）或失败回滚时撤掉。
+            _instancesBeingRemoved.Add(collectorInstanceId);
         }
 
-        if (activation is not null)
-            await activation.StopAsync(cancellationToken);
-
-        if (_secretStore is not null)
-            await _secretStore.DeleteInstanceAsync(collectorInstanceId, cancellationToken);
-        var dataDirectory = Path.Combine(_instanceDataRoot, collectorInstanceId.ToString("N"));
-        if (Directory.Exists(dataDirectory))
-            Directory.Delete(dataDirectory, recursive: true);
-
-        lock (_gate)
+        try
         {
-            ThrowIfDisposed();
-            if (_startingInstances.Contains(collectorInstanceId) ||
-                HasProtocolActivationLocked(collectorInstanceId))
-                throw new InvalidOperationException("Collector Instance still has an active Activation.");
-            var next = _state.WithoutInstance(collectorInstanceId);
-            _store.Save(next);
-            _state = next;
-            _managedProcessStates.Remove(collectorInstanceId);
-            _managedProcessClients.Remove(collectorInstanceId);
+            if (activation is not null)
+                await activation.StopAsync(cancellationToken);
+            // External Host 不是 Host 能杀死的进程，但它的 Activation 生命周期归 Host 所有：撤掉 lease、
+            // 等到终态，Fact Stream 的 writer 才真正没人持有。
+            await StopExternalHostActivationsForInstanceAsync(
+                collectorInstanceId,
+                ExternalHostActivationStopReason.DesiredDisabled);
+
+            if (_secretStore is not null)
+                await _secretStore.DeleteInstanceAsync(collectorInstanceId, cancellationToken);
+            var dataDirectory = Path.Combine(_instanceDataRoot, collectorInstanceId.ToString("N"));
+            if (Directory.Exists(dataDirectory))
+                Directory.Delete(dataDirectory, recursive: true);
+
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                if (_startingInstances.Contains(collectorInstanceId) ||
+                    HasInProcessActivationLocked(collectorInstanceId) ||
+                    HasExternalHostActivationLocked(collectorInstanceId))
+                    throw new InvalidOperationException("Collector Instance still has an active Activation.");
+                var next = _state.WithoutInstance(collectorInstanceId);
+                _store.Save(next);
+                _state = next;
+                _managedProcessStates.Remove(collectorInstanceId);
+                _managedProcessClients.Remove(collectorInstanceId);
+            }
+        }
+        finally
+        {
+            lock (_gate)
+                _instancesBeingRemoved.Remove(collectorInstanceId);
         }
     }
 
-    private bool HasProtocolActivationLocked(Guid collectorInstanceId) =>
+    private bool HasInProcessActivationLocked(Guid collectorInstanceId) =>
         _activations.Values.Any(activation =>
             activation.Streams.Values.Any(stream =>
                 stream.Descriptor.CollectorInstanceId == collectorInstanceId));

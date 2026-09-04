@@ -2,11 +2,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Heartbeat.Core.DTOs.Segments;
-using Heartbeat.Collection.Hub.Ingest;
 
 namespace Heartbeat.Collection.Hub.Collectors.Runtime;
 
-internal sealed class ActivitySegmentFactProjector(ICollectorAppHintResolver? appHintResolver)
+internal sealed class ActivitySegmentFactProjector
 {
     public Guid ProjectedId(Guid streamId, Guid factId)
     {
@@ -34,13 +33,14 @@ internal sealed class ActivitySegmentFactProjector(ICollectorAppHintResolver? ap
             string.IsNullOrWhiteSpace(projectedIdentityKey))
             return false;
 
-        // 宿主 adapter 能把 stream 上的 appHint 解析成 App Identity 时用它，否则退回 Fact 自报的
-        // appIdentityKey。判定只看通用 stream dimension，不认任何具体 Collector 的 schema。
-        var appIdentityKey = stream.Dimensions.TryGetValue("appHint", out var appHint) &&
-                             appHintResolver?.Resolve(appHint) is
-                             { Kind: CollectorAppHintResolutionKind.Resolved } resolution
-            ? resolution.AppIdentityKey
-            : StringProperty(payload, "appIdentityKey");
+        // Stream 上的通用 appIdentityKey dimension 是 App 身份的权威来源；宿主不解析任何具体
+        // Collector 的产品词汇。没有该 dimension 的 Stream（例如 System Collector 自己的输出）退回
+        // Fact 自报的 appIdentityKey。Backend/App Catalog 认不认识这个 Key 与投影无关。
+        var appIdentityKey =
+            stream.Dimensions.TryGetValue("appIdentityKey", out var dimensionAppIdentityKey) &&
+            !string.IsNullOrWhiteSpace(dimensionAppIdentityKey)
+                ? dimensionAppIdentityKey
+                : StringProperty(payload, "appIdentityKey");
         JsonElement? attributes = stream.SchemaId == "heartbeat.system.foreground-segment"
             ? null
             : payload.Clone();

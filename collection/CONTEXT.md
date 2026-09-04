@@ -235,7 +235,7 @@ _Avoid_: 用一个 bool 同时表示用户开关、权限与实际可用性
 **采集器页（Collector page）**:
 共享桌面 UI 中管理采集器的页面，并容纳采集器设置。当前实现只显示 System BuiltIn：system 采集器不可停用，前台应用采集作为无开关的固定基线，其他可选观测深度作为独立采集能力管理。每项能力的开关、实际状态、权限恢复动作与说明都归属 System 条目，不另建脱离所有者的全局“采集能力”区块。窗口活动采集是一个用户能力，不把 focused-window 切换与原始标题拆成两个开关。
 
-通用 ExternalHost / Instance UI 尚未实现；Browser 当前也没有宿主接入路径或卡片（ADR-049）。未来的外部 Collector 管理 UI 由 Catalog、Installation、Instance 与 Runtime State 驱动通用条目：主卡只显示安装事实、“等待连接”、“运行中 · N 个连接”或简短错误，Activation、External Host Identity 与协议错误只进入高级诊断。Host 不提供 Package 人工加载说明、打开目录或具名 App 子项（ADR-051）。
+通用 ExternalHost / Instance UI 尚未实现（issue 10）；宿主侧的通用 ExternalHost 接入已就位（`/v1/collector-protocol/external-host`，issue 06），但 Browser 还没有可安装的 Package，因此它当前仍没有实际接入路径或卡片。未来的外部 Collector 管理 UI 由 Catalog、Installation、Instance 与 Runtime State 驱动通用条目：主卡只显示安装事实、“等待连接”、“运行中 · N 个连接”或简短错误，Activation、External Host Identity 与协议错误只进入高级诊断。Host 不提供 Package 人工加载说明、打开目录或具名 App 子项（ADR-051）。
 _Avoid_: 采集器栏、Collector panel、为某个具体 Collector 在宿主 UI 写死卡片
 
 **Setup**:

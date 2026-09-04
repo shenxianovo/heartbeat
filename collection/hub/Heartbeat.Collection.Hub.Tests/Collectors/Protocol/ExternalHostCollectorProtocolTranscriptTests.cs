@@ -30,15 +30,16 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
             package,
             new SubjectReference(Guid.CreateVersion7(), SubjectKind.Machine),
             new CollectorInstanceSpec(4, 1, config.RootElement.Clone()));
-        var activationId = Guid.CreateVersion7();
         var initialization = runtime.BeginExternalHostActivation(
             instance.CollectorInstanceId,
             package,
             "reference.inprocess",
             package.Artifacts.Single().ContentHash,
             Support(),
-            activationId,
+            "external-host-a",
+            "app.reference",
             Guid.CreateVersion7());
+        var activationId = initialization.ActivationId;
 
         Assert.Equal(4, initialization.Spec.SpecRevision);
         Assert.True(initialization.Spec.Config.GetProperty("enabled").GetBoolean());
@@ -93,15 +94,16 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
             package,
             new SubjectReference(Guid.CreateVersion7(), SubjectKind.Machine),
             new CollectorInstanceSpec(1, 1, config.RootElement.Clone()));
-        var activationId = Guid.CreateVersion7();
         var initialization = runtime.BeginExternalHostActivation(
             instance.CollectorInstanceId,
             package,
             "reference.inprocess",
             package.Artifacts.Single().ContentHash,
             Support(),
-            activationId,
+            "external-host-a",
+            "app.reference",
             Guid.CreateVersion7());
+        var activationId = initialization.ActivationId;
         var activation = await runtime.ReadyExternalHostActivationAsync(
             activationId,
             initialization.Spec.SpecRevision,
@@ -229,10 +231,12 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
         Assert.False(activation.ExternalHostWasTerminated);
 
         var replacement = await fixture.ReadyReplacementAsync();
-        var competing = fixture.BeginReplacement();
-        var competingError = await Assert.ThrowsAsync<CollectorActivationException>(() =>
-            fixture.ReadyAsync(competing).AsTask());
+        // 同一个 External Host Identity 的所有权仍然是排他的：旧 Activation 还活着时，同 identity 的
+        // 竞争者在 activation.hello 就被拒绝，而不是等到 streams.open 才发现 lease 冲突。
+        var competingError = Assert.Throws<CollectorActivationException>(() =>
+            fixture.BeginReplacement());
         Assert.Equal("stream_writer_conflict", competingError.Error.Code);
+        Assert.Contains("External Host Identity", competingError.Message, StringComparison.Ordinal);
         Assert.Equal(CollectorActivationState.Ready, replacement.State);
     }
 
@@ -261,7 +265,6 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
         using var config = JsonDocument.Parse("{}");
         Guid collectorInstanceId;
         var helloMessageId = Guid.CreateVersion7();
-        var firstActivationId = Guid.CreateVersion7();
         using (var runtime = CollectorRuntime.Open(statePath, new SegmentIngestService(new FixedClock())))
         {
             var instance = runtime.CreateInstance(
@@ -275,7 +278,8 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
                 "reference.inprocess",
                 package.Artifacts.Single().ContentHash,
                 Support(),
-                firstActivationId,
+                "external-host-a",
+                "app.reference",
                 helloMessageId);
         }
 
@@ -287,7 +291,8 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
                 "reference.inprocess",
                 package.Artifacts.Single().ContentHash,
                 Support(),
-                Guid.CreateVersion7(),
+                "external-host-a",
+                "app.reference",
                 helloMessageId));
 
         Assert.Equal("protocol_invalid_message", error.Error.Code);
@@ -342,18 +347,28 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
         public string DirectoryPath => _directory.Path;
         public string StatePath => Path.Combine(_directory.Path, "runtime.json");
 
-        public ExternalHostCollectorActivation OpenStreams()
+        public const string DefaultExternalHostIdentity = "external-host-a";
+        public const string DefaultAppIdentityKey = "app.reference";
+
+        public Guid CollectorInstanceId => _instance.CollectorInstanceId;
+        public LocalCollectorPackage Package => _package;
+
+        public ExternalHostCollectorActivation OpenStreams(
+            string externalHostIdentity = DefaultExternalHostIdentity,
+            string appIdentityKey = DefaultAppIdentityKey)
         {
-            var initialization = BeginReplacement();
+            var initialization = BeginReplacement(externalHostIdentity, appIdentityKey);
             return Runtime.OpenExternalHostStreams(
                 initialization.ActivationId,
                 initialization.Spec.SpecRevision,
                 [new OutputBinding("activity", "activity", new Dictionary<string, string>())]);
         }
 
-        public async ValueTask<ExternalHostCollectorActivation> ReadyAsync()
+        public async ValueTask<ExternalHostCollectorActivation> ReadyAsync(
+            string externalHostIdentity = DefaultExternalHostIdentity,
+            string appIdentityKey = DefaultAppIdentityKey)
         {
-            var initialization = BeginReplacement();
+            var initialization = BeginReplacement(externalHostIdentity, appIdentityKey);
             return await ReadyAsync(initialization);
         }
 
@@ -368,14 +383,17 @@ public sealed class ExternalHostCollectorProtocolTranscriptTests
 
         public ValueTask<ExternalHostCollectorActivation> ReadyReplacementAsync() => ReadyAsync();
 
-        public ExternalHostCollectorInitialization BeginReplacement() =>
+        public ExternalHostCollectorInitialization BeginReplacement(
+            string externalHostIdentity = DefaultExternalHostIdentity,
+            string appIdentityKey = DefaultAppIdentityKey) =>
             Runtime.BeginExternalHostActivation(
                 _instance.CollectorInstanceId,
                 _package,
                 "reference.inprocess",
                 _package.Artifacts.Single().ContentHash,
                 Support(),
-                Guid.CreateVersion7(),
+                externalHostIdentity,
+                appIdentityKey,
                 Guid.CreateVersion7());
 
         public CollectorInstance CreateUnrelatedInstance() => Runtime.CreateInstance(

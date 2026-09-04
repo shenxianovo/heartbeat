@@ -47,10 +47,6 @@ public class AgentHostExtensionsTests : IDisposable
         using var provider = services.BuildServiceProvider();
         var hosted = provider.GetServices<IHostedService>().ToList();
 
-        // 平台 head 不再注入任何具体 Collector 的 AppHint 知识（Chrome/Edge 进程名随 Browser 一起走了）。
-        Assert.Equal(
-            CollectorAppHintResolutionKind.Unknown,
-            provider.GetRequiredService<ICollectorAppHintResolver>().Resolve("anything").Kind);
 
         var monitorIndex = hosted.FindIndex(h => h is SystemCollectorHostedService);
         var inputIndex = hosted.FindIndex(h => h is Heartbeat.Desktop.Windows.Services.InputEventCollector);
@@ -58,7 +54,9 @@ public class AgentHostExtensionsTests : IDisposable
 
         Assert.True(monitorIndex >= 0 && inputIndex >= 0 && workerIndex >= 0);
         Assert.Equal(hosted.Count - 1, inputIndex);   // input hook 最先停止，不再向 Event Stream 写入
-        Assert.Equal(inputIndex - 1, monitorIndex);   // system Activation 随后 drain
+        // system Activation 随后 drain。这里只钉相对顺序：通用 binding（如 ExternalHost lease monitor）
+        // 允许排在两者之间，停止次序的保证与它们相邻无关。
+        Assert.True(monitorIndex < inputIndex);
         Assert.True(workerIndex < monitorIndex);      // worker 在 monitor 之后停止，终态 drain 兜底
         Assert.DoesNotContain(hosted, service => service is AppMonitorService);
         Assert.Same(
@@ -112,9 +110,10 @@ public class AgentHostExtensionsTests : IDisposable
 
         using var provider = services.BuildServiceProvider();
 
-        // ExternalHost 的 loopback 传输留着，但默认 handler 谁都不认识。
+        // ExternalHost loopback 绑定是通用能力：注册的 handler 服务所有「自己出现的」Collector，
+        // 它认识的是 Package/Installation，而不是任何具体产品（ADR-051）。
         Assert.Equal(
-            "NullExternalHostProtocolHttpHandler",
+            "ExternalHostCollectorProtocolHandler",
             provider.GetRequiredService<IExternalHostProtocolHttpHandler>().GetType().Name);
     }
 

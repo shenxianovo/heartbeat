@@ -8,8 +8,9 @@ namespace Heartbeat.Collection.Hub.Ingest
 {
     /// <summary>
     /// ExternalHost Collector Protocol 的 loopback HTTP server。仅负责监听器生命周期；路由、协议
-    /// 协商与 Fact 交付由注册进来的 binding handler 拥有。当前宿主没有注册任何 binding handler，
-    /// 默认 adapter 一律 404——通用 ExternalHost 接入能力留待后续 issue（ADR-049）。
+    /// 协商与 Fact 交付由注册进来的 binding handler 拥有。宿主用
+    /// <c>AddExternalHostCollectorBinding</c> 接入通用 binding；没接入的宿主保留默认 adapter，
+    /// 一律 404。两种情况下监听器都不认识任何具名 Collector（ADR-049）。
     /// </summary>
     public class ExternalHostProtocolWorker(
         IExternalHostProtocolHttpHandler handler,

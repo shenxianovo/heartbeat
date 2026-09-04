@@ -152,6 +152,11 @@ namespace Heartbeat.Desktop.Windows.Hosting
             // 宿主组合（ADR-049）。
             services.AddSystemCollectorInProcessBinding(
                 new SystemCollectorBindingOptions(dataDirectory));
+            // 通用 ExternalHost 绑定：一条 loopback 路由服务所有「自己出现的」Collector。宿主不认识
+            // 任何具体产品，能不能接入只由本机有没有对应 Installation 决定（ADR-049、ADR-051）。
+            services.AddExternalHostCollectorBinding(
+                Path.Combine(Path.GetFullPath(dataDirectory), "collector-packages"));
+
             // Input hook starts only after the system Activation has opened its Event Stream and
             // stops before that Activation drains.
             services.AddHostedService<InputEventCollector>();

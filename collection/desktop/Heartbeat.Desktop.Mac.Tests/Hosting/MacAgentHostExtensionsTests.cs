@@ -28,10 +28,6 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
         var services = BuildServices();
         using var provider = services.BuildServiceProvider();
 
-        // 平台 head 不再注入任何具体 Collector 的 AppHint 知识（Chrome/Edge 进程名随 Browser 一起走了）。
-        Assert.Equal(
-            CollectorAppHintResolutionKind.Unknown,
-            provider.GetRequiredService<ICollectorAppHintResolver>().Resolve("anything").Kind);
         Assert.IsType<MacDesktopObservationSource>(
             provider.GetRequiredService<IDesktopObservationSource>());
 
@@ -41,7 +37,8 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
         var inputCollector = provider.GetRequiredService<MacInputEventCollector>();
         var inputIndex = hosted.FindIndex(item => ReferenceEquals(item, inputCollector));
         Assert.Equal(hosted.Count - 1, inputIndex);
-        Assert.Equal(inputIndex - 1, monitorIndex);
+        // 只钉相对顺序：通用 binding（如 ExternalHost lease monitor）允许排在两者之间。
+        Assert.True(monitorIndex < inputIndex);
         Assert.True(uploadIndex >= 0 && uploadIndex < monitorIndex);
         Assert.True(inputIndex >= 0);
         Assert.DoesNotContain(hosted, service => service is AppMonitorService);
@@ -101,9 +98,10 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
                 || NamesANamedOptionalCollector(descriptor.ImplementationType));
 
         using var provider = services.BuildServiceProvider();
-        // ExternalHost 的 loopback 传输留着，但默认 handler 谁都不认识。
+        // ExternalHost loopback 绑定是通用能力：注册的 handler 服务所有「自己出现的」Collector，
+        // 它认识的是 Package/Installation，而不是任何具体产品（ADR-051）。
         Assert.Equal(
-            "NullExternalHostProtocolHttpHandler",
+            "ExternalHostCollectorProtocolHandler",
             provider.GetRequiredService<IExternalHostProtocolHttpHandler>().GetType().Name);
 
         var hosted = provider.GetServices<IHostedService>().ToList();

@@ -131,6 +131,11 @@ public static class MacAgentHostExtensions
         // 组合（ADR-049）。
         services.AddSystemCollectorInProcessBinding(new SystemCollectorBindingOptions(
             paths.DataDirectory));
+        // 通用 ExternalHost 绑定：一条 loopback 路由服务所有「自己出现的」Collector。宿主不认识
+        // 任何具体产品，能不能接入只由本机有没有对应 Installation 决定（ADR-049、ADR-051）。
+        services.AddExternalHostCollectorBinding(
+            Path.Combine(Path.GetFullPath(paths.DataDirectory), "collector-packages"));
+
         // Input monitoring starts after the system Activation opens its Event Stream and stops
         // before that Activation drains.
         services.AddHostedService(sp => sp.GetRequiredService<MacInputEventCollector>());

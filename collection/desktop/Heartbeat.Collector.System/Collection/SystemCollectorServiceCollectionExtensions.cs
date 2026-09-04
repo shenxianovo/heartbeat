@@ -30,7 +30,6 @@ public static class SystemCollectorServiceCollectionExtensions
             return CollectorRuntime.Open(
                 Path.Combine(bindingOptions.DataDirectory, "collector-runtime.json"),
                 provider.GetRequiredService<ISegmentSink>(),
-                appHintResolver: provider.GetRequiredService<ICollectorAppHintResolver>(),
                 inputEventSink: provider.GetRequiredService<IInputEventFactSink>());
         });
         services.AddHostedService<SystemCollectorHostedService>();

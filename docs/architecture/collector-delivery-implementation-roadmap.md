@@ -96,9 +96,10 @@ flowchart TB
 
 统一 Protocol 是语义统一，不是 transport 统一。三类 Driver 必须继续通过相同 conformance vectors。
 
-上表是目标态。Browser 一行的"默认宿主 = Desktop"当前不成立：ADR-049 之后宿主不再持有 Browser
-runtime、protocol handler、安装目录或 UI 条目，通用 ExternalHost 的安装与连接能力尚未实现，因此 Desktop
-没有任何 Browser 接入路径。
+上表是目标态。Browser 一行的"默认宿主 = Desktop"现在只差 Browser 自己那一半：ADR-049 之后宿主不再持有
+Browser runtime、专属 protocol handler、安装目录或 UI 条目，而通用 ExternalHost 接入能力已按 ADR-051 实现
+（issue 06），Desktop 两个 head 都注册了通用 binding。Browser 要真正接上，还需要它自己的 Package 发布
+（issue 07）与 Desktop Marketplace 安装入口（issue 10）。
 
 ## 第一条小功能：外置本地 VRChat Package
 
@@ -122,8 +123,11 @@ flowchart LR
 ```
 
 2026-09-02 更新：这条 tracer 的两个调用者只剩一个。Desktop 的 Browser bundled import 已随宿主解耦删除
-（ADR-049），`CollectorPackageInstallations` 目前只有 Headless 的 VRChat 启动在用；Desktop 侧的 Installation
-调用者要等通用 ExternalHost 安装入口才会回来。
+（ADR-049），`CollectorPackageInstallations` 当时只有 Headless 的 VRChat 启动在用。
+
+2026-09-04 更新：Desktop 侧的调用者回来了，但换成了通用形态——`AddExternalHostCollectorBinding` 在两个
+Desktop head 上注册 `CollectorPackageInstallations`，通用 ExternalHost handler 用它把对端声明的精确
+Package/Artifact 解析成已验证 Installation（issue 06）。它不是 Browser 专属 import 的复活。
 
 ### 明确不进入第一条 tracer
 
@@ -153,8 +157,9 @@ flowchart LR
   VRChat 0.2.1 已真实发布、进入 Catalog 并完成生产 Marketplace smoke。F 已按 ADR-050 增加 Registry Catalog 与一键安装 Marketplace；
   普通 `main` 验证不发布用户可见 Package。
 - G 已完成宿主侧的全部：Desktop 构建与产物不含 Browser，宿主也不再认识 Browser——Hub 与两个平台 head
-  没有它的 runtime、protocol handler、安装目录、平台知识或 UI 条目（ADR-049）。剩下的是通用 ExternalHost
-  的安装与连接能力，加上 Collector tag 与可下载 Package（依赖 E/F）；在这两者到位前 Browser 没有任何宿主
+  没有它的 runtime、专属 protocol handler、安装目录、平台知识或 UI 条目（ADR-049）。通用 ExternalHost 的连接
+  能力也已实现（issue 06：一条 `/v1/collector-protocol/external-host` route，身份级所有权）。剩下的是 Collector
+  tag 与可下载 Package（依赖 E/F）以及 Desktop 的安装入口（issue 10）；在这两者到位前 Browser 仍然没有实际
   接入路径。
 - G 的剩余部分复用已经证明的 Installation/Web seam，不恢复 Browser 专属 binding。
 
@@ -169,7 +174,7 @@ flowchart LR
 顺序不能颠倒：Browser 不能先用专属 handler 抢跑；Desktop UI 也不能自行复制一套 Package 下载或 Runtime
 状态。每一步都先用 Reference Collector 证明通用 interface，再由 Browser 成为真实调用者。
 
-### Feature 06：通用 ExternalHost Runtime
+### Feature 06：通用 ExternalHost Runtime（已完成）
 
 ```mermaid
 flowchart LR
@@ -184,6 +189,13 @@ flowchart LR
 这一步同时删除 `ICollectorAppHintResolver`：ExternalHost Collector 直接提供稳定 `appIdentityKey`，通用
 Segment 投影只消费该 dimension。现有 Instance 级 writer 冲突必须被 identity/Stream 级所有权取代，而不是
 在外面增加重试。
+
+2026-09-04：已按上图实现。`ExternalHostCollectorProtocolHandler` 承载
+`/v1/collector-protocol/external-host`，Instance 由 Runtime 拥有（一个 Package 一台机器一个默认 Instance），
+所有权单位是 (Instance, External Host Identity) 与它打开的 Stream，`ICollectorAppHintResolver` 已删除。
+实现中修掉三个「引用来源从宿主状态变成对端声明」才成立的缺陷（畸形引用以未处理异常收场、围栏后
+`facts.publish` 裸抛 `OperationCanceledException`、被拒绝的 hello 会留下持久 Instance），细节见
+`.scratch/collector-package-registry/issues/06-browser-external-host-update.md`。
 
 ### Feature 10：Desktop 通用 Marketplace
 
@@ -223,11 +235,12 @@ flowchart LR
   Browser 的 package target，Desktop Release 也不再安装 node、构建 Browser 或跑 Collector contracts
   （Browser 的构建与契约验证留在 `collector-contracts.yml`）。System 作为 BuiltIn 由 publish target 进入
   `dotnet publish` 产物，Desktop Release 另有产物断言（System 在、Browser 不在）与打包后的 startup smoke。
-- Browser 目前是“代码已与 Desktop 解耦、但还没有 Web Release 或宿主接入能力”：它的扩展代码、Package 构建 target 与 npm 测试留在
-  `collection/collectors/Heartbeat.Collector.Browser`，并继续由 `collector-contracts.yml` 验证，但宿主里没有
-  任何 Browser 接入路径——Browser 专属 runtime 与 protocol handler 已删除，`/v1/collector-protocol/browser`
-  不再存在（默认 ExternalHost handler 一律 404），`CollectorPackages/Browser` 默认路径与 UI 卡片也随之删除。
-  手工侧载不再能让它连上宿主。通用 ExternalHost 安装/连接是后续 issue（issue 09 的已知残留之一）。
+- Browser 目前是“代码已与 Desktop 解耦、宿主侧通用接入已就位、但它自己还没有 Web Release”：扩展代码、
+  Package 构建 target 与 npm 测试留在 `collection/collectors/Heartbeat.Collector.Browser`，并继续由
+  `collector-contracts.yml` 验证。Browser 专属 runtime 与 protocol handler 仍然不存在，
+  `/v1/collector-protocol/browser` 也不会回来；宿主提供的是通用
+  `/v1/collector-protocol/external-host`（issue 06），谁被安装谁能连，宿主不为 Browser 加分支。因此 Browser
+  重新接上只差 Package 发布（issue 07）与 Desktop 安装入口（issue 10）。
 - `facts.segment/v1` 已统一走 ActivitySegment 投影：Package 自有 JSON Schema 先验证 payload，通用 projector
   再要求共同 `identityKey`，Hub 不再按 schema id / major 列出 Browser、VRChat 或测试 Collector。Hub.Tests
   也不再构建 Browser 或引用 VRChat 产品；VRChat ManagedProcess E2E 由 Collector 自身测试拥有。

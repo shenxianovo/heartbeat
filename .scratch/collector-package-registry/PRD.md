@@ -12,13 +12,16 @@ VRChat 的显式 tag 与不可变 Web Release 已完成真实发布，0.2.1 可�
 当前已按 [ADR-050](../../docs/adr/050-generic-collector-marketplace-and-runtime-owned-instances.md) 实现通用
 Collector Marketplace：Registry Catalog 展示全部托管 Collector 的最新版，用户一键安装，Package 声明默认
 Instance，Runtime 成为动态 Instance 唯一权威。Headless 独立 deploy、VRChat Catalog 发布与生产
-安装/授权/恢复/卸载 smoke 均已完成；当前主缺口是通用 ExternalHost、Desktop Marketplace 调用者与
-Browser 独立 Release。
+安装/授权/恢复/卸载 smoke 均已完成。通用 ExternalHost 接入已按
+[ADR-051](../../docs/adr/051-generic-external-host-identity-and-browser-delivery.md) 实现（issue 06）：一条
+`/v1/collector-protocol/external-host` route 承载全部自己出现的 External Host，所有权按 External Host Identity
+而非整个 Instance 隔离。当前主缺口是 Desktop Marketplace 调用者与 Browser 独立 Release。
 
 Browser 现在的状态是“代码与 Desktop 解耦、但尚未形成 Web Release 和宿主接入”：它不进 Desktop 构建与产物，扩展代码、Package
 构建 target 与 npm 测试留在 `collection/collectors/Heartbeat.Collector.Browser` 并由 `collector-contracts.yml`
-验证；但宿主里没有 Browser runtime、protocol handler、安装目录或 UI 条目，`/v1/collector-protocol/browser`
-也不存在，因此手工侧载不再能让它连上宿主。通用 ExternalHost 安装/连接是后续 issue。
+验证；但宿主里没有 Browser runtime、专属 protocol handler、安装目录或 UI 条目，`/v1/collector-protocol/browser`
+也不存在。宿主侧的通用接入能力已经就位（issue 06），Browser 要重新连上只差自己的 Package 发布与被安装
+（issue 07）与 Desktop Marketplace 调用者（issue 10）；宿主不会为它加任何具名分支。
 
 2026-09-01 以前的 Registry/Approve/Switch 实现已撤回。issues 01/02 已按 ADR-048/050 完成；issues 06/07
 已按 [ADR-051](../../docs/adr/051-generic-external-host-identity-and-browser-delivery.md) 重写，issue 10 承接
@@ -82,7 +85,7 @@ Browser 独立发布与真实 smoke。
 | 03 shared local installation | ready-for-human | PowerShell CLI 安全/真实构建待跨平台验证 |
 | 04 exact package approval | wontfix | ADR-048 明确不做 approval/offer |
 | 05 VRChat ready switch | wontfix | ADR-048 明确不做 candidate/LKG switch |
-| 06 generic ExternalHost | ready-for-agent | 通用 route、身份级 Activation/Stream ownership 与卸载 |
+| 06 generic ExternalHost | ready-for-human | 通用 route、身份级 Activation/Stream ownership 与卸载已实现 |
 | 07 Browser release and smoke | ready-for-agent | Browser Collector 自身、四 target Release 与真实 smoke |
 | 10 Desktop Marketplace | ready-for-agent | Desktop 原生通用安装/状态/卸载界面 |
 
@@ -97,7 +100,8 @@ Browser 独立发布与真实 smoke。
       Instance 失败被隔离（issue 08）。
 - [x] 宿主不认识具名可选 Collector：Desktop 与通用 Hub Runtime 只组合通用 seam + System BuiltIn，
       Browser 专属 runtime / protocol handler / 安装目录 / UI 条目全部删除（issue 09）。
-- [ ] 通用 ExternalHost 安装/连接能力存在，Browser 由此重新获得宿主接入路径（issue 09 已知残留）。
+- [ ] 通用 ExternalHost 安装/连接能力存在，Browser 由此重新获得宿主接入路径：通用一半已完成（issue 06），
+      Browser 侧接入待 issue 07/10。
 - [x] `facts.segment/v1` 由 Package `FactKind` 与 schema 驱动通用 ActivitySegment 投影，宿主不再硬编码
       具名 schema id 列表（issue 09）。
 - [ ] 三类 Driver 继续通过统一 Protocol conformance。
@@ -148,3 +152,17 @@ Machine-scoped Instance，多个浏览器/Profile 以 External Host Identity 并
 `appIdentityKey`，Host 不解释 App Hint。同 identity 重连只替换自身旧 Activation，改变 App identity 则拒绝；
 无连接是“等待连接”而不是失败。当前只做首次安装与完整卸载，不做更新/LKG，也删除了此前讨论的
 `manualSetup`/打开目录 UI。实现顺序固定为 issue 06 → issue 10 → issue 07。
+
+### 2026-09-04 — 通用 ExternalHost 实现完成（issue 06）
+
+`ExternalHostCollectorProtocolHandler` + `AddExternalHostCollectorBinding` 交付了不含具名 Collector 的
+ExternalHost 纵切：连接资格只看本地已验证 Installation、Marketplace 已创建的默认 Instance 与精确
+Package/Artifact 身份；hello 不能创建或复活 Instance。并发所有权单位缩小到 External Host Identity 与它打开的
+Fact Stream。
+`ICollectorAppHintResolver` 退役，`appIdentityKey` 作为通用 Stream dimension 直接进入 ActivitySegment 投影。
+
+实现中修掉三个「引用来源从宿主状态变成对端声明」才成立的真问题：畸形/路径穿越的 Package 引用会以未处理
+异常收场（现为 `protocol_invalid_message`）；被围栏 Activation 上的 `facts.publish` 裸抛
+`OperationCanceledException`（现按握手同一口径给 `activation_stopping`）；ExternalHost hello 曾直接创建持久
+Instance（现在只解析安装时按 Default Instance Blueprint 创建的 Instance）。收口 review 还修正了冲突 hello
+先踢掉健康 owner，以及 handler 写死 `facts.segment` 两处语义错误。细节见 issue 06 comments。

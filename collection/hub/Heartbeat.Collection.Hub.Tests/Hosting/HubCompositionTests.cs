@@ -79,9 +79,6 @@ public class HubCompositionTests
         Assert.Same(
             provider.GetRequiredService<UploadStatusRegistry>(),
             provider.GetRequiredService<IUploadStatus>());
-        Assert.Equal(
-            CollectorAppHintResolutionKind.Unknown,
-            provider.GetRequiredService<ICollectorAppHintResolver>().Resolve("chrome").Kind);
         var hosted = provider.GetServices<IHostedService>().ToList();
         Assert.Contains(hosted, service => service is UploadWorker);
         Assert.Contains(hosted, service => service is StatusUploadWorker);

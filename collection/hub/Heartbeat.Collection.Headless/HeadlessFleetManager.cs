@@ -441,10 +441,28 @@ public sealed class HeadlessFleetManager(HeadlessFleetOptions options) : Backgro
             true,
             entry.Instance.PackageVersion,
             entry.Instance.CollectorInstanceId,
-            entry.Failure is null ? runtime?.Phase.ToString() ?? "Starting" : "Failed",
+            entry.Failure is null ? DescribePhase(entry, runtime) : "Failed",
             runtime?.AuthorizationChallenge,
             entry.Failure is null ? _pipelines?.CurrentActivity(entry.Instance.CollectorInstanceId) : null,
             entry.Failure ?? DescribeFailure(runtime?.Failure));
+    }
+
+    /// <summary>
+    /// Phase 只报真实观察到的状态。没有 ManagedProcess runtime 不等于「正在启动」：ExternalHost 交付的
+    /// Collector 由对端自己连上来，宿主此时的真实状态是「已就绪，等对端接入」。以前统一兜底成 Starting
+    /// 会让「永远不会有人来连」和「马上就起来」在管理面上长得一样。
+    /// </summary>
+    private string DescribePhase(Entry entry, CollectorRuntimeSnapshot? runtime)
+    {
+        if (runtime is not null)
+            return runtime.Phase.ToString();
+        var externalHost = _runtime!.DescribeExternalHostInstance(entry.Instance.CollectorInstanceId);
+        return externalHost.State switch
+        {
+            CollectorInstanceExternalHostState.Connected => nameof(CollectorRuntimePhase.Ready),
+            CollectorInstanceExternalHostState.Negotiating => nameof(CollectorRuntimePhase.Negotiating),
+            _ => nameof(CollectorInstanceExternalHostState.WaitingForExternalHost)
+        };
     }
 
     private static string? DescribeFailure(CollectorRuntimeFailure? failure) =>

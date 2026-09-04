@@ -13,7 +13,7 @@ flowchart LR
     HUB["Collection Hub\nCollector Runtime"]
     PROJ["Fact validation + projectors\nsegment / input event"]
     CACHE["Upload streams + local cache"]
-    LOOP["ExternalHost listener seam\nNull handler → 404"]
+    LOOP["ExternalHost listener seam\ngeneric binding handler"]
 
     UI -->|"typed calls · desired state"| HUB
     OS -->|"typed observations\nenqueue-only callbacks"| SYS
@@ -44,13 +44,15 @@ flowchart LR
   ANALYTICS -->|"EF Core / PostgreSQL protocol"| DB[(PostgreSQL)]
 ```
 
-当前通用 ExternalHost listener 默认由 `NullExternalHostProtocolHttpHandler` 返回 404；Browser 专属 discovery
-路由已经删除，直到通用安装/连接 adapter 落地。旧的 `POST /v1/segments`、`GET /v1/hub` 和 source 级
-配置/声明入口已经退役。`SegmentIngestService` 仍是 Runtime projector 的内部 segment sink，不是外部协议。
+通用 ExternalHost listener 由 `AddExternalHostCollectorBinding` 注册的
+`ExternalHostCollectorProtocolHandler` 承载，route 是 `/v1/collector-protocol/external-host`；两个 Desktop head
+都已接入，没有接入这个 binding 的宿主（如 Headless）保留 `NullExternalHostProtocolHttpHandler` 一律 404。
+Browser 专属 discovery 路由仍然不存在，也不会再有：这条 route 不认识任何具名 Collector。旧的
+`POST /v1/segments`、`GET /v1/hub` 和 source 级配置/声明入口已经退役。`SegmentIngestService` 仍是 Runtime projector 的内部 segment sink，不是外部协议。
 
 Desktop 的平台观察回调不执行协议 I/O：system Collector 先把 Segment / Event 放入 ingress queue，再由后台 delivery pump 持久化并发送。Collector Protocol Client 不捕获宿主 `SynchronizationContext`，因此 Hub 背压不会阻塞 Avalonia UI、macOS LaunchServices 回调或 Windows hook/message-loop 线程。
 
-## ExternalHost 目标身份语义（当前未接入 Desktop）
+## ExternalHost 身份语义
 
 ```mermaid
 flowchart TD
@@ -71,11 +73,20 @@ flowchart TD
   B1 --> ES
 ```
 
-`CollectorRuntime` 已有 ExternalHost Activation 与 Stream 基础机制，但当前仍以整个 Instance 阻止并行
-writer，Desktop 也没有 ExternalHost 安装、discovery 或握手 adapter，因此没有实际连接者。issue 06 将把
-所有权缩小到 External Host Identity，并让外部宿主生成和持久化 `externalHostIdentity`；清除其数据或
-重装会产生新 Host，旧 Host 只作为历史身份保留。Collector 直接提供稳定 `appIdentityKey`；Backend 暂时
-不认识该 Key 时仍保留真实身份，Collector 无法可靠识别宿主 App 时不开始 Activation。
+并发所有权的单位是 (Collector Instance, External Host Identity) 与它打开的 Fact Stream，不是整个 Instance：
+同一个 Instance 下不同 identity 可以同时 Ready 并各自写自己的 Stream，同一 identity 重连只以 `LeaseReplaced`
+替换自己的旧 Activation。Instance 由 Runtime 拥有，一个 Package 在一台机器上只有一个默认 Instance
+（`InstanceKey = "default"`），外部宿主不各自造 Instance。
+
+`externalHostIdentity` 由外部宿主自己生成并持久化；清除其数据或重装会产生新 Host，旧 Host 只作为历史身份
+保留。identity 到 `appIdentityKey` 的绑定权威是持久 Stream 的 identifying dimensions，因此宿主重启后同一
+identity 仍然不能静默改绑到另一个 App Key。Collector 直接提供稳定 `appIdentityKey`；Backend 暂时不认识该 Key
+时仍保留真实身份，Collector 无法可靠识别宿主 App 时不开始 Activation。
+
+连接资格只由本地已验证 Installation 与 `hello` 声明的精确 Package/Artifact 身份决定：未安装得到
+`package_not_installed`，version/contentHash/artifactId/artifactHash 任一漂移或声明的不是当前平台被选中的
+`externalHost` Artifact 都 fail closed，被拒绝的连接不留下任何持久状态。安装存在但当前没有连接时，管理事实是
+`WaitingForExternalHost`，不是 Activation 启动失败。
 
 ## Fact Schema 的单一来源与校验链
 

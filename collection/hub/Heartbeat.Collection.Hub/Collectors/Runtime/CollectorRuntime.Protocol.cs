@@ -174,6 +174,7 @@ public sealed partial class CollectorRuntime
                     helloRequestHash,
                     activationId);
                 if (_startingInstances.Contains(collectorInstanceId) ||
+                    HasExternalHostActivationLocked(collectorInstanceId) ||
                     _activations.Values.Any(activation =>
                         activation.State != CollectorActivationState.Stopped &&
                         activation.Streams.Values.Any(stream =>

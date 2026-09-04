@@ -14,6 +14,8 @@ public sealed class TailScrollViewer : ScrollViewer
     private bool _scrollScheduled;
     private bool _isApplyingTailScroll;
 
+    protected override Type StyleKeyOverride => typeof(ScrollViewer);
+
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);

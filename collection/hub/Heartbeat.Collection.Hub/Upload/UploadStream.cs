@@ -6,8 +6,9 @@ namespace Heartbeat.Collection.Hub.Upload;
 
 /// <summary>
 /// Durable Upload Stream. Retryable failures stay queued; 400/422 are bisected until bad records
-/// can be dead-lettered; 426 pauses the stream. At every return point each drained item has either
-/// been delivered, durably cached/dead-lettered, or reinjected into its source.
+/// can be dead-lettered; 413 is bisected until the transport accepts each sub-batch; 426 pauses
+/// the stream. At every return point each drained item has either been delivered, durably
+/// cached/dead-lettered, or reinjected into its source.
 /// </summary>
 public sealed class UploadStream<T>
 {
@@ -201,20 +202,35 @@ public sealed class UploadStream<T>
             if (items.Count == 1)
                 return DeadLetterOrRetry(items[0], response);
 
-            var midpoint = items.Count / 2;
-            var left = await ProcessBatchAsync(items.GetRange(0, midpoint));
-            if (left.Paused)
-                return BatchResult<T>.Pause(left.RetryItems.Concat(items.Skip(midpoint)).ToList());
+            return await SplitBatchAsync(items);
+        }
 
-            var right = await ProcessBatchAsync(items.GetRange(midpoint, items.Count - midpoint));
-            return new BatchResult<T>(
-                left.RetryItems.Concat(right.RetryItems).ToList(),
-                right.Paused);
+        if (response.StatusCode == 413)
+        {
+            // A proxy can reject a backlog even though every record is valid. Splitting preserves
+            // successful sub-batches and prevents the same oversized request from retrying forever.
+            if (items.Count == 1)
+                return BatchResult<T>.Retry(items);
+
+            return await SplitBatchAsync(items);
         }
 
         // Network failures, recoverable auth (401), 408, 429 and 5xx are explicitly retryable.
         // Unknown statuses also default to retain-and-retry: data loss is worse than delayed progress.
         return BatchResult<T>.Retry(items);
+    }
+
+    private async Task<BatchResult<T>> SplitBatchAsync(List<T> items)
+    {
+        var midpoint = items.Count / 2;
+        var left = await ProcessBatchAsync(items.GetRange(0, midpoint));
+        if (left.Paused)
+            return BatchResult<T>.Pause(left.RetryItems.Concat(items.Skip(midpoint)).ToList());
+
+        var right = await ProcessBatchAsync(items.GetRange(midpoint, items.Count - midpoint));
+        return new BatchResult<T>(
+            left.RetryItems.Concat(right.RetryItems).ToList(),
+            right.Paused);
     }
 
     private BatchResult<T> DeadLetterOrRetry(T item, ApiResult rejection)

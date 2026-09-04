@@ -51,6 +51,7 @@ _Avoid_: 用 messageId 充当 Gap 身份、把相同时间范围自动视为同�
 
 **Durable InputEvent Projection（持久输入事件投影）**:
 Hub 已提交 Event Fact 后、Analytics InputEvent 上传确认前的持久责任窗口；`InputEventBuffer` 是该窗口唯一容量 owner。满容量返回 backpressure 并保留原 FactId，底层 JSON 文件只做原子持久化、不自行裁剪。
+出网每轮只交付有界批次，413 由 Upload Stream 继续拆批；Analytics 确认送达后先从 pending 投影移除、再把稳定 FactId 写入有界 Delivery Receipt，Runtime 重启回放时据此跳过已送达 Event。收据写失败或被裁剪最多造成服务端幂等去重的重复上行，不能导致未送达 Event 被跳过。
 _Avoid_: 在 JsonFileCache 与投影层分别封顶、把 count clamp 当成成功、满容量丢 oldest 却不报告 Gap
 
 **Collector Protocol Conformance Suite（采集器协议一致性套件）**:
@@ -191,7 +192,7 @@ ExternalHost Collector 对承载自身的应用所作的稳定平台身份声明
 _Avoid_: App Hint、Host 侧产品映射、用显示名称或进程名代替稳定 AppIdentityKey
 
 **Upload Stream（上传流）**:
-泛化的出网流（ADR-020/022）：绑定一个出网源（IUploadSource），drain 一轮 = 先重传离线缓存，再取 fresh 出网——送达，或落离线缓存，否则自动重注入源（重注入不回滚更新的快照）。"批次不蒸发"是流自持的不变量。compact 为按流策略（segments 出网前压缩快照，input-events 不压缩）。segments 与 input-events 各一实例。
+泛化的出网流（ADR-020/022）：绑定一个出网源（IUploadSource），drain 一轮 = 先重传离线缓存，再取一个 adapter-defined 有界 fresh 批出网——送达，或落离线缓存，否则自动重注入源（重注入不回滚更新的快照）。413 会递归拆批，已成功子批不再重试；单项仍过大则保留重试。"批次不蒸发"是流自持的不变量。compact 为按流策略（segments 出网前压缩快照，input-events 不压缩）。segments 与 input-events 各一实例。
 _Avoid_: UploadService（退役的三份同构模板）、Upload Channel（ADR-022 前的旧名，彼时退回项由调用方重注入）
 
 **Segment Rotation Boundary（段轮换边界）**:

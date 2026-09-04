@@ -71,6 +71,12 @@ public static class HeartbeatCacheFormats
             })
     ];
 
+    public static IJsonCacheFileFormat<Guid> InputEventDeliveryReceiptVersion1() =>
+        new JsonCacheFileFormat<Guid, string>(
+            version: 1,
+            item => item.ToString("D"),
+            Guid.Parse);
+
     private static SegmentCacheItemV2 ToSegmentV2(ActivitySegmentItem item) => new(
         item.Id,
         item.Source,

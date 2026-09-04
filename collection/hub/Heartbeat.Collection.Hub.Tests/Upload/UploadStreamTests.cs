@@ -516,6 +516,32 @@ public class UploadStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task PayloadTooLarge_SplitsBatchUntilAccepted_WithoutDeadLetteringOrRetryingDeliveredItems()
+    {
+        var cachePath = Path.Combine(_tempDirectory, "payload-too-large.json");
+        var deadLetterPath = cachePath + ".dead-letter.json";
+        var source = new FakeSource();
+        source.Items.AddRange([Segment(), Segment(), Segment()]);
+        var handler = new ControlledHandler((_, body, _) =>
+            new HttpResponseMessage(
+                ParseBody(body).Segments.Count > 1
+                    ? HttpStatusCode.RequestEntityTooLarge
+                    : HttpStatusCode.OK));
+
+        var stream = RealStream(source, cachePath, deadLetterPath, handler);
+        await stream.DrainAsync();
+
+        Assert.Empty(RealCache(cachePath).Load());
+        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
+        Assert.Equal(0, stream.Status.DeadLetterCount);
+        Assert.Equal(5, handler.RequestBodies.Count);
+        Assert.Equal(
+            3,
+            handler.RequestBodies.Count(body => ParseBody(body).Segments.Count == 1));
+        Assert.False(File.Exists(deadLetterPath));
+    }
+
+    [Fact]
     public async Task UpgradeRequired_PausesStream_RetainsQueue_AndCanRecoverAfterRestart()
     {
         var cachePath = Path.Combine(_tempDirectory, "upgrade.json");

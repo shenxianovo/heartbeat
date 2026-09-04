@@ -4,6 +4,8 @@
 
 ## Date: 2026-07-11
 
+> 2026-09-04 implementation note: `Drain()` 返回下一个 adapter-defined 出网批，不再承诺清空整个 backlog。InputEvent durable projection 每批最多 5,000 条并保留其余项；Upload Stream 对 413 递归拆批，只保留未送达项。Analytics 确认送达的 InputEvent FactId 另存有界 Delivery Receipt，阻止 Collector Runtime 启动回放把最近的已送达 Event 再塞回 pending；提交顺序保证收据故障最多导致幂等重传，不会吞掉未送达数据。
+
 ## Context
 
 ADR-020 §5 的上传通道契约是"送达，或落离线缓存，否则原样退回——退回项由调用方重注入源 buffer"。2026-07 的架构评审发现这把"drain 后的批不静默蒸发"不变量摊在三个文件里：通道退回（`UploadChannel`）、编排者重注入（`UsageUploadWorker`）、两个 buffer 各自的幂等重入。理解"上传和缓存都失败会怎样"要同时读三处；而编排这一切的 `UsageUploadWorker` 构造依赖 6 个具体类（含拖着输入钩子的 `InputEventCollector`），防丢分支与 StopAsync 终态 drain 恰好是零覆盖区——ADR-020 §6 用注释钉住的"托管服务注册顺序翻转防丢尾巴"没有任何测试保护。

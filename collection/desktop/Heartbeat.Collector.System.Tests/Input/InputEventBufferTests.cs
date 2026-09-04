@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Heartbeat.Collector.System.Input;
 using Heartbeat.Collection.Hub.Collectors.Runtime;
 using Heartbeat.Collection.Hub.Time;
@@ -250,6 +251,39 @@ public class InputEventBufferTests
     }
 
     [Fact]
+    public void DurableProjection_ConfirmedUploadIsNotRequeuedByLaterRuntimeReplay()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"heartbeat-input-buffer-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "input-event-facts-buffer.json");
+        var item = new InputEventItem
+        {
+            Id = Guid.CreateVersion7(),
+            EventType = InputEventType.KeyDown,
+            CodeSet = InputCodeSets.HeartbeatKeyPositionV1,
+            Code = (short)InputKeyPosition.KeyA,
+            Timestamp = DateTimeOffset.UnixEpoch
+        };
+        try
+        {
+            var first = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
+            ((IInputEventFactSink)first).Accept(item, isReplay: false);
+            var source = (IDurableUploadSource<InputEventItem>)first;
+            var delivered = source.Drain();
+            source.CompleteDrain(delivered, []);
+
+            var restarted = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
+            ((IInputEventFactReplaySink)restarted).Replay([item]);
+
+            Assert.Empty(((IUploadSource<InputEventItem>)restarted).Drain());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void DurableProjection_ReplaysLargeFactBatchWithinStartupBudget()
     {
         var root = Path.Combine(Path.GetTempPath(), $"heartbeat-input-buffer-{Guid.NewGuid():N}");
@@ -277,6 +311,43 @@ public class InputEventBufferTests
             var retained = restarted.DrainAll();
             Assert.Equal(items.Select(item => item.Id), retained.Select(item => item.Id));
             Assert.Equal(items.Length, retained.Select(item => item.Id).Distinct().Count());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DurableUploadSource_DrainsAtMostFiveThousandItemsAndPreservesRemainder()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"heartbeat-input-buffer-{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "input-event-facts-buffer.json");
+        var items = Enumerable.Range(0, 5_003).Select(index => new InputEventItem
+        {
+            Id = Guid.CreateVersion7(),
+            EventType = InputEventType.KeyDown,
+            CodeSet = InputCodeSets.HeartbeatKeyPositionV1,
+            Code = (short)InputKeyPosition.KeyA,
+            Timestamp = DateTimeOffset.UnixEpoch.AddTicks(index)
+        }).ToArray();
+        try
+        {
+            var buffer = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
+            ((IInputEventFactReplaySink)buffer).Replay(items);
+            var source = (IDurableUploadSource<InputEventItem>)buffer;
+
+            var first = source.Drain();
+
+            Assert.Equal(5_000, first.Count);
+            Assert.Equal(items.Take(5_000).Select(item => item.Id), first.Select(item => item.Id));
+            Assert.True(
+                JsonSerializer.SerializeToUtf8Bytes(
+                    new InputEventUploadRequest { Events = first }).Length < 1_048_576,
+                "The bounded InputEvent upload batch must stay below the default reverse-proxy body limit.");
+            source.CompleteDrain(first, []);
+            Assert.Equal(items.Skip(5_000).Select(item => item.Id), source.Drain().Select(item => item.Id));
         }
         finally
         {

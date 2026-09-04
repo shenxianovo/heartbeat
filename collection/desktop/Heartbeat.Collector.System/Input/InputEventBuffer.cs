@@ -31,6 +31,7 @@ namespace Heartbeat.Collector.System.Input
         IInputEventFactReplaySink
     {
         public const int WheelDelta = 120;
+        public const int UploadBatchSize = 5_000;
         public const string StatusStreamName = "输入事件 durable projection";
 
         private readonly IClock _clock;
@@ -38,6 +39,8 @@ namespace Heartbeat.Collector.System.Input
         private readonly int _capacity;
         private readonly UploadStatusRegistry? _statusRegistry;
         private readonly JsonFileCache<InputEventItem>? _durableProjectionCache;
+        private readonly JsonFileCache<Guid>? _deliveryReceiptCache;
+        private readonly HashSet<Guid> _deliveredIds = [];
         private readonly object _durableGate = new();
 
         private readonly ConcurrentQueue<InputEventItem> _queue = new();
@@ -73,6 +76,23 @@ namespace Heartbeat.Collector.System.Input
                     HeartbeatCacheFormats.InputEventVersion2(),
                     HeartbeatCacheFormats.InputEventMigrations());
                 _count = _durableProjectionCache.Load().Count;
+
+                var receiptPath = Path.Combine(
+                    Path.GetDirectoryName(Path.GetFullPath(durableProjectionPath))!,
+                    $"{Path.GetFileNameWithoutExtension(durableProjectionPath)}-delivery-receipts.json");
+                var receiptCache = new JsonFileCache<Guid>(
+                    receiptPath,
+                    capacity,
+                    HeartbeatCacheFormats.InputEventDeliveryReceiptVersion1());
+                if (receiptCache.Status.State == CacheFileState.MigrationFailed)
+                {
+                    receiptCache.Dispose();
+                }
+                else
+                {
+                    _deliveryReceiptCache = receiptCache;
+                    _deliveredIds.UnionWith(receiptCache.Load());
+                }
             }
             UpdateStatus(_count);
         }
@@ -170,6 +190,27 @@ namespace Heartbeat.Collector.System.Input
             }
         }
 
+        private List<InputEventItem> DrainUploadBatch()
+        {
+            if (_durableProjectionCache is not null)
+            {
+                lock (_durableGate)
+                    return _durableProjectionCache.Load().Take(UploadBatchSize).ToList();
+            }
+
+            lock (_durableGate)
+            {
+                var result = new List<InputEventItem>(Math.Min(Count, UploadBatchSize));
+                while (result.Count < UploadBatchSize && _queue.TryDequeue(out var item))
+                {
+                    _count--;
+                    result.Add(item);
+                }
+                UpdateStatus(_count);
+                return result;
+            }
+        }
+
         /// <summary>
         /// 退回重注入（ADR-020 上传通道契约）：既没送达也没缓存住的批原样回队，
         /// 保留原 Id——服务端按 Id 幂等去重，重复注入不产生重复行。
@@ -181,7 +222,7 @@ namespace Heartbeat.Collector.System.Input
         }
 
         /// <summary>IUploadSource adapter：出网侧的统一 drain 词汇。</summary>
-        List<InputEventItem> IUploadSource<InputEventItem>.Drain() => DrainAll();
+        List<InputEventItem> IUploadSource<InputEventItem>.Drain() => DrainUploadBatch();
 
         /// <summary>IUploadSource adapter：退回批保 Id 回队。</summary>
         void IUploadSource<InputEventItem>.Reinject(List<InputEventItem> items) => Requeue(items);
@@ -206,13 +247,28 @@ namespace Heartbeat.Collector.System.Input
                 _durableProjectionCache.Replace(retained);
                 Volatile.Write(ref _count, retained.Count);
                 UpdateStatus(retained.Count);
+
+                if (_deliveryReceiptCache is not null)
+                {
+                    var delivered = drainedIds
+                        .Where(id => !retryIds.Contains(id) && !_deliveredIds.Contains(id))
+                        .ToList();
+                    if (delivered.Count > 0)
+                    {
+                        var receipts = _deliveryReceiptCache.Load();
+                        receipts.AddRange(delivered);
+                        _deliveryReceiptCache.Replace(receipts);
+                        _deliveredIds.Clear();
+                        _deliveredIds.UnionWith(_deliveryReceiptCache.Load());
+                    }
+                }
             }
         }
 
         bool IInputEventFactSink.TryAccept(
             InputEventItem item,
             bool isReplay,
-            ICollectorProjectionCommitFence commitFence) => TryEnqueueItem(item, commitFence);
+            ICollectorProjectionCommitFence commitFence) => TryEnqueueItem(item, isReplay, commitFence);
 
         void IInputEventFactReplaySink.Replay(IReadOnlyList<InputEventItem> items)
         {
@@ -229,7 +285,7 @@ namespace Heartbeat.Collector.System.Input
 
                 foreach (var item in items)
                 {
-                    if (retainedIds.Contains(item.Id))
+                    if (retainedIds.Contains(item.Id) || _deliveredIds.Contains(item.Id))
                         continue;
                     if (retained.Count >= _capacity)
                     {
@@ -276,12 +332,16 @@ namespace Heartbeat.Collector.System.Input
 
         private void EnqueueItem(InputEventItem item)
         {
-            if (!TryEnqueueItem(item, UnfencedInputEventCommitFence.Instance))
+            if (!TryEnqueueItem(
+                    item,
+                    isReplay: false,
+                    commitFence: UnfencedInputEventCommitFence.Instance))
                 throw new InvalidOperationException("The local InputEvent enqueue was unexpectedly fenced.");
         }
 
         private bool TryEnqueueItem(
             InputEventItem item,
+            bool isReplay,
             ICollectorProjectionCommitFence commitFence)
         {
             ArgumentNullException.ThrowIfNull(commitFence);
@@ -291,6 +351,8 @@ namespace Heartbeat.Collector.System.Input
                 {
                     var retained = _durableProjectionCache.Load();
                     if (retained.Any(existing => existing.Id == item.Id))
+                        return true;
+                    if (isReplay && _deliveredIds.Contains(item.Id))
                         return true;
                     if (retained.Count >= _capacity)
                     {

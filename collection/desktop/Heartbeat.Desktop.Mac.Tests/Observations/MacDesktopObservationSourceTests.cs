@@ -1,3 +1,5 @@
+using Heartbeat.Desktop.Mac.Configuration;
+using Heartbeat.Desktop.Mac.Native;
 using Heartbeat.Desktop.Mac.Observations;
 using Heartbeat.Collector.System.Observations;
 
@@ -5,6 +7,58 @@ namespace Heartbeat.Desktop.Mac.Tests.Observations;
 
 public sealed class MacDesktopObservationSourceTests
 {
+    [Fact]
+    public async Task SwitchingApplication_PreservesItsStaticTitleWhileObserverChangesInBackground()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"heartbeat-title-{Guid.NewGuid()}");
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        try
+        {
+            var config = new MacConfigManager(new MacAgentPaths(root));
+            config.Update(value => value.WindowTitleObservationEnabled = true);
+            using var accessibility = new MacAccessibilityEvents(config, new NativeTitles(entered, release), new NoCommands());
+            var desktop = new FakeEvents { FrontmostApplication = new("com.apple.Safari", null, "Safari", 99) };
+            var source = new MacDesktopObservationSource(desktop, accessibility);
+            var received = new List<DesktopObservation>();
+            source.Observation += received.Add;
+            source.Start();
+            await accessibility.RefreshPermission();
+            desktop.FrontmostApplication = new("com.apple.Terminal", null, "Terminal", 100);
+            desktop.Activate();
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            try
+            {
+                var activation = Assert.Single(received, value => value.Kind == DesktopObservationKind.AppActivated);
+                Assert.Equal("Static terminal title", activation.Activity.Title);
+            }
+            finally { release.Set(); await accessibility.RefreshPermission(); source.Stop(); }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private sealed class NativeTitles(ManualResetEventSlim entered, ManualResetEventSlim release) : IMacAccessibilityNative
+    {
+        public event Action<Exception>? Failed { add { } remove { } }
+        public event Action<MacAccessibilityObservation>? Observation { add { } remove { } }
+        public bool IsAvailable => true;
+        public bool IsProcessTrusted => true;
+        public void RequestProcessTrust() { }
+        public string? ReadFocusedWindowTitle(int processIdentifier) => processIdentifier == 100 ? "Static terminal title" : "Safari";
+        public void ObserveApplication(int processIdentifier)
+        {
+            if (processIdentifier != 100) return;
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        }
+        public void StopObserving() { }
+    }
+
+    private sealed class NoCommands : IMacCommandRunner
+    {
+        public MacCommandResult Run(string fileName, IReadOnlyList<string> arguments) => throw new InvalidOperationException("No permission prompt expected");
+    }
+
     private sealed class FakeAccessibility : IMacAccessibilityEvents
     {
         public event Action<MacAccessibilityObservation>? Observation;

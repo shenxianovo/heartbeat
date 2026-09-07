@@ -6,7 +6,7 @@ public sealed class ObservationThread
     private readonly object _gate = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly Thread _thread;
-    private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<Exception?> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _stopping;
     private bool _finished;
 
@@ -16,7 +16,7 @@ public sealed class ObservationThread
         {
             try { run(_stop.Token); }
             catch (OperationCanceledException) when (IsStopping) { }
-            catch (Exception exception) { Failure = exception; }
+            catch (Exception exception) { _failure = exception; }
             finally
             {
                 lock (_gate)
@@ -24,42 +24,38 @@ public sealed class ObservationThread
                     _finished = true;
                     _stop.Dispose();
                 }
-                if (Failure is { } failure)
+                if (_failure is { } failure)
                 {
                     try { onFailure?.Invoke(failure); }
                     catch (Exception exception) { Serilog.Log.Warning(exception, "Observation failure notification failed"); }
                 }
                 // The final notification belongs to this session too. Do not allow a replacement
                 // to start while its predecessor can still publish a failure.
-                _completion.SetResult();
+                _completion.SetResult(_failure);
             }
         })
         { IsBackground = true, Name = name };
     }
 
-    public Task Completion => _completion.Task;
-    public Exception? Failure { get; private set; }
+    public Task<Exception?> Completion => _completion.Task;
+    private Exception? _failure;
     public bool IsStopping { get { lock (_gate) return _stopping; } }
 
     public void Start() => _thread.Start();
 
     public void Fail(Exception failure)
     {
-        Failure ??= failure;
-        Stop(TimeSpan.Zero);
+        lock (_gate) _failure ??= failure;
+        RequestStop();
     }
 
-    public void Stop(TimeSpan wait)
+    public void RequestStop()
     {
         lock (_gate)
         {
             _stopping = true;
             if (!_finished) _stop.Cancel();
         }
-        // A stop requested by a native callback cannot join itself. Its session remains owned
-        // until Completion; the platform owner must not replace it during that interval.
-        if (_thread == Thread.CurrentThread) return;
-        if (!_thread.Join(wait))
-            throw new TimeoutException("The native observation session has not finished stopping.");
+
     }
 }

@@ -142,7 +142,8 @@ namespace Heartbeat.Desktop.Windows.Utils
         {
             Session? session;
             lock (_gate) session = _session;
-            session?.Thread.Stop(TimeSpan.FromSeconds(3));
+            session?.Thread.RequestStop();
+            session?.Thread.Completion.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
             lock (_gate)
                 if (ReferenceEquals(_session, session) && session?.Thread.Completion.IsCompleted == true)
                     _session = null;

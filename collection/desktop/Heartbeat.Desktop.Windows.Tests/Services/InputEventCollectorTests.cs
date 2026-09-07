@@ -65,56 +65,6 @@ public sealed class InputEventCollectorTests
     }
 
     [Fact]
-    public async Task DelayedFailureObserver_DoesNotOverwriteSuccessfulRecovery()
-    {
-        using var entered = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-        var recover = false;
-        var hook = new FakeHook
-        {
-            BeforeStart = () =>
-        {
-            if (recover) return;
-            entered.Set();
-            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
-            throw new IOException("Native start failed");
-        }
-        };
-        var recording = new MutablePolicy(true);
-        var status = new InputObservationStatus();
-        using var collector = new InputEventCollector(hook, new FakeSignal(), new MutableInteractionPolicy(false),
-            recording, new InputEventBuffer(new FixedClock()), status);
-        var starting = Task.Run(() => collector.StartAsync(CancellationToken.None));
-        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-        var context = new QueuedContext();
-        var previous = SynchronizationContext.Current;
-        try
-        {
-            SynchronizationContext.SetSynchronizationContext(context);
-            recording.Set(true);
-        }
-        finally { SynchronizationContext.SetSynchronizationContext(previous); release.Set(); }
-        await starting;
-        Assert.True(SpinWait.SpinUntil(() => context.HasPending, TimeSpan.FromSeconds(5)));
-        Assert.False(status.IsAvailable);
-        recover = true;
-        recording.Set(false);
-        recording.Set(true);
-        Assert.True(status.IsAvailable);
-        context.Drain();
-        Assert.True(status.IsAvailable);
-        Assert.True(hook.Running);
-    }
-
-    private sealed class QueuedContext : SynchronizationContext
-    {
-        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _callbacks = new();
-        public bool HasPending => !_callbacks.IsEmpty;
-        public override void Post(SendOrPostCallback callback, object? state) => _callbacks.Enqueue(() => callback(state));
-        public void Drain() { while (_callbacks.TryDequeue(out var callback)) callback(); }
-    }
-
-    [Fact]
     public async Task NativeFailure_PausesInputAndAllowsExplicitRecoveryWithoutChangingIntent()
     {
         var hook = new FakeHook();
@@ -125,13 +75,16 @@ public sealed class InputEventCollectorTests
             recording, buffer, status);
         await collector.StartAsync(CancellationToken.None);
         hook.RaiseFailure(new IOException("hook failed"));
+        await collector.Refresh();
         hook.RaiseMouse(1);
         Assert.False(status.IsAvailable);
         Assert.True(recording.Enabled);
         Assert.Empty(buffer.DrainAll());
         Assert.False(hook.Running);
         recording.Set(false);
+        await collector.Refresh();
         recording.Set(true);
+        await collector.Refresh();
         Assert.True(status.IsAvailable);
         Assert.True(hook.Running);
     }
@@ -199,8 +152,10 @@ public sealed class InputEventCollectorTests
 
         hook.RaiseKeyDown(keyA);
         policy.Set(false);
+        await collector.Refresh();
         hook.RaiseKeyUp(keyA); // recording=false 时仍允许清理 held state
         policy.Set(true);
+        await collector.Refresh();
         hook.RaiseKeyDown(keyA);
 
         var events = buffer.DrainAll();
@@ -226,9 +181,11 @@ public sealed class InputEventCollectorTests
         Assert.Equal(0, hook.StartCount);
 
         interaction.Set(true);
+        await collector.Refresh();
         Assert.Equal(1, hook.StartCount);
 
         interaction.Set(false);
+        await collector.Refresh();
         Assert.Equal(1, hook.StopCount);
     }
 }

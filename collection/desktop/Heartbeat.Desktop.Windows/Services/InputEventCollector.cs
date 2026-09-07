@@ -3,7 +3,6 @@ using Heartbeat.Collector.System.Input;
 using Heartbeat.Collector.System.Observations;
 using Heartbeat.Collection.Hub.Configuration;
 using Microsoft.Extensions.Hosting;
-using Serilog;
 
 namespace Heartbeat.Desktop.Windows.Services
 {
@@ -20,12 +19,10 @@ namespace Heartbeat.Desktop.Windows.Services
         private readonly IInteractionSignalPolicy _interactionSettings;
         private readonly IInputEventRecordingPolicy _recordingSettings;
         private readonly InputEventBuffer _buffer;
-        private readonly ObservationReconciler _transitions;
+        private readonly ObservationCapability<bool, bool> _capability;
         private readonly object _gate = new();
         private readonly InputObservationStatus _status;
         private bool _started;
-        private bool _hookRunning;
-        private Task? _stopTask;
 
         public InputEventCollector(ILowLevelInputHook hook, IInputActivitySignal inputActivity,
             IInteractionSignalPolicy interactionSettings, IInputEventRecordingPolicy recordingSettings,
@@ -37,16 +34,18 @@ namespace Heartbeat.Desktop.Windows.Services
             _interactionSettings = interactionSettings;
             _recordingSettings = recordingSettings;
             _buffer = buffer;
-            _transitions = new ObservationReconciler(ReconcileHook);
+            _capability = new(true, false,
+                () => new(true, _interactionSettings.Enabled || _recordingSettings.Enabled ? true : null),
+                _ => _hook.StartHook(), _hook.StopHook);
+            _capability.Changed += _status.SetAvailable;
         }
 
         public Task StartAsync(CancellationToken cancellationToken)
         {
             lock (_gate)
             {
-                if (_stopTask is not null) throw new InvalidOperationException("Input collection is stopping.");
-                if (_started) return Task.CompletedTask;
-                _hook.Failed += OnNativeFailure;
+                if (_started) return _capability.Start().WaitAsync(cancellationToken);
+                _hook.Failed += _capability.ReportFailure;
                 _hook.KeyDown += OnKeyDown;
                 _hook.KeyUp += OnKeyUp;
                 _hook.MouseButton += OnMouseButton;
@@ -54,49 +53,26 @@ namespace Heartbeat.Desktop.Windows.Services
                 _interactionSettings.Changed += OnInteractionChanged;
                 _recordingSettings.Changed += OnRecordingChanged;
                 _started = true;
+                return _capability.Start().WaitAsync(cancellationToken);
             }
-            _ = ObserveTransitionAsync(_transitions.Reconcile());
-            return Task.CompletedTask;
         }
 
         public Task StopAsync(CancellationToken cancellationToken)
         {
-            TaskCompletionSource completion;
             lock (_gate)
             {
-                if (_stopTask is not null) return _stopTask.WaitAsync(cancellationToken);
                 _started = false;
                 Unsubscribe();
-                completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                _stopTask = completion.Task;
+                return _capability.Stop().WaitAsync(cancellationToken);
             }
-            _ = CompleteStopAsync(completion);
-            return completion.Task.WaitAsync(cancellationToken);
         }
 
-        private async Task CompleteStopAsync(TaskCompletionSource completion)
-        {
-            try { await _transitions.Reconcile().ConfigureAwait(false); completion.SetResult(); }
-            catch (Exception exception) { completion.SetException(exception); }
-        }
-
-        private async Task ObserveTransitionAsync(Task transition)
-        {
-            try { await transition; }
-            catch (Exception exception) { Log.Warning(exception, "Windows input capability transition failed"); }
-        }
-
-        private void OnNativeFailure(Exception error)
-        {
-            _status.SetAvailable(false);
-            Log.Warning(error, "Windows input observation failed");
-            _ = ObserveTransitionAsync(_transitions.Reconcile());
-        }
+        public Task Refresh() => _capability.Refresh();
 
         // 回调保持最小工作：仅转发给 buffer（buffer 内部为并发安全的轻量操作）
         private void OnKeyDown(WindowsNativeKeyObservation observation)
         {
-            lock (_gate) { if (!_started || !_status.IsAvailable) return; }
+            if (!_capability.AcceptsObservations) return;
             if (!_recordingSettings.Enabled ||
                 !WindowsKeyPositionMapper.TryMap(observation, out var position))
                 return;
@@ -112,7 +88,7 @@ namespace Heartbeat.Desktop.Windows.Services
         }
         private void OnMouseButton(short code)
         {
-            lock (_gate) { if (!_started || !_status.IsAvailable) return; }
+            if (!_capability.AcceptsObservations) return;
             // 点击（含触摸板点击）标记输入活动，供标题变化门控使用（ADR-016）。
             if (_interactionSettings.Enabled)
                 _inputActivity.MarkClick();
@@ -121,61 +97,26 @@ namespace Heartbeat.Desktop.Windows.Services
         }
         private void OnScroll(int delta)
         {
-            lock (_gate) { if (!_started || !_status.IsAvailable) return; }
+            if (!_capability.AcceptsObservations) return;
             if (_recordingSettings.Enabled)
                 _buffer.OnScroll(delta);
         }
 
         private void OnRecordingChanged(bool enabled)
         {
-            _status.SetAvailable(true);
             if (!enabled)
                 _buffer.ResetTransientState();
-            _ = ObserveTransitionAsync(_transitions.Reconcile());
+            _capability.Refresh(retry: true);
         }
 
         private void OnInteractionChanged(bool enabled)
         {
-            _status.SetAvailable(true);
-            _ = ObserveTransitionAsync(_transitions.Reconcile());
-        }
-
-        private void ReconcileHook()
-        {
-            try { ApplyHookState(); }
-            catch
-            {
-                _status.SetAvailable(false);
-                throw;
-            }
-        }
-
-        private void ApplyHookState()
-        {
-            bool started;
-            lock (_gate) started = _started;
-            var shouldRun = started && _status.IsAvailable && (_interactionSettings.Enabled || _recordingSettings.Enabled);
-            if (shouldRun && !_hookRunning)
-            {
-                _hook.StartHook();
-                _hookRunning = true;
-            }
-            else if (!shouldRun)
-            {
-                StopHook();
-            }
-        }
-
-        private void StopHook()
-        {
-            if (!_hookRunning) return;
-            _hook.StopHook();
-            _hookRunning = false;
+            _capability.Refresh(retry: true);
         }
 
         private void Unsubscribe()
         {
-            _hook.Failed -= OnNativeFailure;
+            _hook.Failed -= _capability.ReportFailure;
             _hook.KeyDown -= OnKeyDown;
             _hook.KeyUp -= OnKeyUp;
             _hook.MouseButton -= OnMouseButton;

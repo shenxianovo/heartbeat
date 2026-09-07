@@ -75,7 +75,8 @@ public sealed class MacInputMonitoringNative : IMacInputMonitoringNative, IDispo
     {
         Session? session;
         lock (_gate) session = _session;
-        session?.Thread.Stop(TimeSpan.FromSeconds(2));
+        session?.Thread.RequestStop();
+        session?.Thread.Completion.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
         lock (_gate)
             if (ReferenceEquals(_session, session) && session?.Thread.Completion.IsCompleted == true)
                 _session = null;

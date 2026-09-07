@@ -14,6 +14,28 @@ public sealed class MacInputEventCollectorTests : IDisposable
         $"heartbeat-mac-input-{Guid.NewGuid()}");
 
     [Fact]
+    public async Task DisablingCapability_ReturnsWhileNativeCleanupIsBlocked()
+    {
+        var config = NewConfig();
+        config.Update(value => value.InputEventRecordingEnabled = true);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var native = new FakeNative
+        {
+            IsAuthorized = true,
+            BeforeStop = () => { entered.Set(); Assert.True(release.Wait(TimeSpan.FromSeconds(5))); }
+        };
+        using var collector = new MacInputEventCollector(config, native, new FakeCommandRunner(),
+            new FakeSignal(), new InputEventBuffer(new FixedClock()));
+        await collector.StartAsync(CancellationToken.None);
+        var submitting = Task.Run(() => collector.SetInputEventRecordingEnabledFromUser(false));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        try { await submitting.WaitAsync(TimeSpan.FromMilliseconds(300)); }
+        finally { release.Set(); await submitting; await collector.StopAsync(CancellationToken.None); }
+        Assert.False(native.Running);
+    }
+
+    [Fact]
     public async Task NativeFailure_IsReportedWithoutOverwritingTheEnabledIntent()
     {
         var config = NewConfig();
@@ -23,10 +45,12 @@ public sealed class MacInputEventCollectorTests : IDisposable
             new FakeSignal(), new InputEventBuffer(new FixedClock()));
         await collector.StartAsync(CancellationToken.None);
         native.RaiseFailure(new IOException("event tap failed"));
+        await collector.RefreshPermission();
         Assert.Equal(MacInputMonitoringCapabilityState.Unavailable, collector.CapabilityState);
         Assert.True(config.Current.InputEventRecordingEnabled);
         Assert.False(native.Running);
         collector.SetInputEventRecordingEnabledFromUser(true);
+        await collector.RefreshPermission();
         Assert.Equal(MacInputMonitoringCapabilityState.Available, collector.CapabilityState);
         Assert.True(native.Running);
     }
@@ -46,6 +70,7 @@ public sealed class MacInputEventCollectorTests : IDisposable
         await collector.StartAsync(CancellationToken.None);
 
         collector.SetInteractionSignalEnabledFromUser(true);
+        await collector.RefreshPermission();
 
         Assert.True(config.Current.InteractionSignalEnabled);
         Assert.Equal(1, native.RequestCount);
@@ -68,6 +93,7 @@ public sealed class MacInputEventCollectorTests : IDisposable
         await collector.StartAsync(CancellationToken.None);
 
         collector.SetInteractionSignalEnabledFromUser(true);
+        await collector.RefreshPermission();
 
         Assert.Equal(0, native.RequestCount);
         Assert.Equal(1, native.StartCount);

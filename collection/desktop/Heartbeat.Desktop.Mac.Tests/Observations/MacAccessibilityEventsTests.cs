@@ -11,13 +11,14 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         $"heartbeat-accessibility-{Guid.NewGuid()}");
 
     [Fact]
-    public void FirstLaunchAndUnrelatedSettings_DoNotPromptForAccessibility()
+    public async Task FirstLaunchAndUnrelatedSettings_DoNotPromptForAccessibility()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         var native = new FakeNative { IsProcessTrusted = false };
         using var events = new MacAccessibilityEvents(config, native, new FakeCommandRunner());
 
         events.Start();
+        await events.RefreshPermission();
         config.Update(value => value.DeviceName = "Studio");
 
         Assert.False(events.Enabled);
@@ -27,14 +28,16 @@ public sealed class MacAccessibilityEventsTests : IDisposable
     }
 
     [Fact]
-    public void EnablingFromUser_PersistsSettingAndExplicitlyRequestsPermission()
+    public async Task EnablingFromUser_PersistsSettingAndExplicitlyRequestsPermission()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         var native = new FakeNative { IsProcessTrusted = false };
         using var events = new MacAccessibilityEvents(config, native, new FakeCommandRunner());
         events.Start();
+        await events.RefreshPermission();
 
         events.SetEnabledFromUser(true);
+        await events.RefreshPermission();
 
         Assert.True(config.Current.WindowTitleObservationEnabled);
         Assert.Equal(1, native.RequestCount);
@@ -42,7 +45,7 @@ public sealed class MacAccessibilityEventsTests : IDisposable
     }
 
     [Fact]
-    public void EnabledSettingAtStartup_ChecksPermissionWithoutPromptingAgain()
+    public async Task EnabledSettingAtStartup_ChecksPermissionWithoutPromptingAgain()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         config.Update(value => value.WindowTitleObservationEnabled = true);
@@ -50,13 +53,14 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         using var events = new MacAccessibilityEvents(config, native, new FakeCommandRunner());
 
         events.Start();
+        await events.RefreshPermission();
 
         Assert.Equal(MacAccessibilityCapabilityState.PermissionRequired, events.CapabilityState);
         Assert.Equal(0, native.RequestCount);
     }
 
     [Fact]
-    public void AuthorizationStartsCurrentApplicationAndForwardsNativeSemantics()
+    public async Task AuthorizationStartsCurrentApplicationAndForwardsNativeSemantics()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         var native = new FakeNative
@@ -68,9 +72,12 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         var received = new List<MacAccessibilityObservation>();
         events.Observation += received.Add;
         events.Start();
+        await events.RefreshPermission();
         events.SetCurrentApplication(99);
+        await events.RefreshPermission();
 
         events.SetEnabledFromUser(true);
+        await events.RefreshPermission();
         native.Raise(new MacAccessibilityObservation(
             MacAccessibilityObservationKind.FocusedWindowChanged,
             "Program.cs"));
@@ -87,18 +94,21 @@ public sealed class MacAccessibilityEventsTests : IDisposable
     }
 
     [Fact]
-    public void RevocationStopsAccessibilityButLeavesCapabilityRecoverable()
+    public async Task RevocationStopsAccessibilityButLeavesCapabilityRecoverable()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         var native = new FakeNative { IsProcessTrusted = true };
         using var events = new MacAccessibilityEvents(config, native, new FakeCommandRunner());
         events.Start();
+        await events.RefreshPermission();
         events.SetCurrentApplication(99);
+        await events.RefreshPermission();
         events.SetEnabledFromUser(true);
+        await events.RefreshPermission();
         var stopCountBeforeRevocation = native.StopCount;
 
         native.IsProcessTrusted = false;
-        events.RefreshPermission();
+        await events.RefreshPermission();
 
         Assert.Equal(MacAccessibilityCapabilityState.PermissionRequired, events.CapabilityState);
         Assert.True(native.StopCount > stopCountBeforeRevocation);
@@ -106,7 +116,7 @@ public sealed class MacAccessibilityEventsTests : IDisposable
     }
 
     [Fact]
-    public void LateNotificationFromPreviousApplication_IsIgnored()
+    public async Task LateNotificationFromPreviousApplication_IsIgnored()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         var native = new FakeNative { IsProcessTrusted = true };
@@ -114,8 +124,11 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         var received = new List<MacAccessibilityObservation>();
         events.Observation += received.Add;
         events.Start();
+        await events.RefreshPermission();
         events.SetCurrentApplication(99);
+        await events.RefreshPermission();
         events.SetEnabledFromUser(true);
+        await events.RefreshPermission();
 
         native.Raise(new MacAccessibilityObservation(
             MacAccessibilityObservationKind.TitleChanged,
@@ -126,16 +139,19 @@ public sealed class MacAccessibilityEventsTests : IDisposable
     }
 
     [Fact]
-    public void PermissionRecoveryPathOpensSystemSettingsOnlyFromUserAction()
+    public async Task PermissionRecoveryPathOpensSystemSettingsOnlyFromUserAction()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         var native = new FakeNative { IsProcessTrusted = false };
         var runner = new FakeCommandRunner();
         using var events = new MacAccessibilityEvents(config, native, runner);
         events.Start();
+        await events.RefreshPermission();
         events.SetEnabledFromUser(true);
+        await events.RefreshPermission();
 
         events.OpenPermissionSettingsFromUser();
+        await events.RefreshPermission();
 
         var command = Assert.Single(runner.Commands);
         Assert.Equal("/usr/bin/open", command.FileName);
@@ -143,7 +159,7 @@ public sealed class MacAccessibilityEventsTests : IDisposable
     }
 
     [Fact]
-    public void FailedEnable_LastCapabilityNotificationMatchesUnavailableState()
+    public async Task FailedEnable_LastCapabilityNotificationMatchesUnavailableState()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         var native = new FakeNative { IsProcessTrusted = true, StartFailure = new IOException("AX start failed") };
@@ -151,16 +167,19 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         var states = new List<MacAccessibilityCapabilityState>();
         events.CapabilityChanged += states.Add;
         events.Start();
+        await events.RefreshPermission();
         events.SetCurrentApplication(99);
+        await events.RefreshPermission();
 
         events.SetEnabledFromUser(true);
+        await events.RefreshPermission();
 
         Assert.Equal(MacAccessibilityCapabilityState.Unavailable, events.CapabilityState);
         Assert.Equal(events.CapabilityState, states.Last());
     }
 
     [Fact]
-    public void SwitchingApplicationAfterNativeFailure_ImmediatelyRecoversCapabilityAndObservations()
+    public async Task SwitchingApplicationAfterNativeFailure_ImmediatelyRecoversCapabilityAndObservations()
     {
         var config = new MacConfigManager(new MacAgentPaths(_root));
         config.Update(value => value.WindowTitleObservationEnabled = true);
@@ -169,11 +188,15 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         var received = new List<MacAccessibilityObservation>();
         events.Observation += received.Add;
         events.Start();
+        await events.RefreshPermission();
         events.SetCurrentApplication(99);
+        await events.RefreshPermission();
         native.RaiseFailure(new InvalidOperationException("Application observation failed"));
+        await events.RefreshPermission();
         Assert.Equal(MacAccessibilityCapabilityState.Unavailable, events.CapabilityState);
 
         events.SetCurrentApplication(100);
+        await events.RefreshPermission();
         native.Raise(new MacAccessibilityObservation(MacAccessibilityObservationKind.TitleChanged, "New App", 100));
 
         Assert.Equal(MacAccessibilityCapabilityState.Available, events.CapabilityState);

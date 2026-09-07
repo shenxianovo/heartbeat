@@ -60,6 +60,10 @@ Mac Input Monitoring、Accessibility 与 Windows input hook 的原生线程、�
 
 原生故障通过能力状态报告，保留用户启用意图；权限或实际状态不允许时拒绝迟到观察。转换失败状态在串行过程内发布，调用者的异步等待不再拥有状态写入权。输入能力的停止结果共享，完成路径不依赖调用者 UI 上下文。
 
+后续收紧移除调用者线程上的 `ObservationReconciler`。`ObservationCapability` 统一拥有后台串行执行、最新目标刷新、实际状态发布、权限轮询与停止等待；平台能力只映射配置/权限、执行原生操作并翻译观察。配置提交立即返回，停止完成仍可显式等待。无变化的权限轮询不关闭正常观察接收；原生 session 通过 `RequestStop` 发出停止信号，`Completion` 在清理和最终通知后给出结束结果。
+
+AX 当前标题是按当前 PID 发出的独立查询，不依赖通知 session 是否已切换完成。同步的 Desktop Observation Source Stop 接口仍等待能力停止；它不是配置变更入口，未在本片扩大改造该共享采集契约。原生设备验收与退出产品策略仍保留各自门禁。
+
 Ticket 01 实现和自动验证完成，具体证据与真实 Mac/Windows 验收步骤见 `.scratch/runtime-ownership/issues/01-capability-sessions.md`。用户要求本轮完成 01 后暂停，02–05 未实施；这不代表整套运行期决定或退出产品策略已全部完成。
 
 ## 尚待裁决

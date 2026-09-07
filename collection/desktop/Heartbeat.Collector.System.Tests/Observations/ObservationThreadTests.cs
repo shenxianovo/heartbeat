@@ -19,8 +19,7 @@ public sealed class ObservationThreadTests
         Assert.True(notifying.Wait(TimeSpan.FromSeconds(5)));
         try { Assert.False(session.Completion.IsCompleted); }
         finally { release.Set(); await session.Completion.WaitAsync(TimeSpan.FromSeconds(5)); }
-        session.Stop(TimeSpan.FromSeconds(5));
-        Assert.Same(failure, session.Failure);
+        Assert.Same(failure, await session.Completion);
     }
 
     [Fact]
@@ -45,13 +44,12 @@ public sealed class ObservationThreadTests
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
         try
         {
-            Assert.Throws<TimeoutException>(() => session.Stop(TimeSpan.Zero));
+            session.RequestStop();
             Assert.False(session.Completion.IsCompleted);
         }
         finally { release.Set(); await session.Completion.WaitAsync(TimeSpan.FromSeconds(5)); }
-        session.Stop(TimeSpan.FromSeconds(5));
         Assert.False(startedNative);
         Assert.True(releasedNative);
-        Assert.Null(session.Failure);
+        Assert.Null(await session.Completion);
     }
 }

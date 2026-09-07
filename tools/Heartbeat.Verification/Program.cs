@@ -1,5 +1,8 @@
 using Heartbeat.Verification;
 
+if (args.FirstOrDefault() == "__profile-probe")
+    return ProfileProbe.Run(args[1..]);
+
 if (args.FirstOrDefault() == "__supervise")
     return await ServiceSupervisor.RunAsync(args[1..]);
 
@@ -7,10 +10,12 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
 {
     Console.WriteLine("""
         Heartbeat real-process verification
-        dotnet run --project tools/Heartbeat.Verification -- run headless-main [options]
+        dotnet run --project tools/Heartbeat.Verification -- run <headless-main|desktop-main> [options]
 
           --config PATH             Existing Headless config (default: .local/heartbeat-headless.json).
                                     Only apiKey and management settings are read; its data is never used.
+          --artifact SERVICE=PATH   Use existing analytics/headless/desktop/reference binary (Desktop also accepts .app).
+                                    The selected service is not rebuilt; report includes version and tree hash.
           --timeout-seconds N       Per-stage runtime deadline (default: 120; builds: 600).
           --keep                    Keep the lane alive after the result until Ctrl+C, then clean up.
           --fault disconnect-upload Deliberately disconnect Hub upload; this run MUST fail.

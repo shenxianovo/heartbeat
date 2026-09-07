@@ -386,7 +386,7 @@
                           Foreground="{DynamicResource HeartbeatPrimaryBrush}" />
             </controls:SettingsCard.HeaderIcon>
             <controls:SettingsCard.ActionContent>
-              <ToggleSwitch IsChecked="{Binding LoginStartEnabled}" />
+              <ToggleSwitch IsChecked="{Binding LoginStartEnabled}" IsEnabled="{Binding LoginStartSupported}" />
             </controls:SettingsCard.ActionContent>
           </controls:SettingsCard>
 

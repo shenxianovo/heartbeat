@@ -31,8 +31,7 @@ namespace Heartbeat.Desktop.Windows.Hosting
         /// </summary>
         public static IServiceCollection AddHeartbeatAgent(
             this IServiceCollection services,
-            ConfigManager? configManager = null,
-            SingleInstanceGuard? guard = null)
+            ConfigManager? configManager = null)
         {
             // 宿主的本机数据全部落在同一个数据目录下。调用方注入 ConfigManager 即可把整棵树重定向到
             // 隔离目录，打包产物的启动 smoke 靠这一点做到不读写真实用户数据。
@@ -43,12 +42,6 @@ namespace Heartbeat.Desktop.Windows.Hosting
             services.AddHeartbeatHub();
             services.AddCollectorRuntime(new CollectorRuntimeStorageOptions(dataDirectory));
             services.AddMachineCollectorMarketplace("windows");
-
-            // 单实例守卫（由调用方创建并传入，Agent 负责管理生命周期）
-            if (guard != null)
-            {
-                services.AddSingleton(guard);
-            }
 
             // ConfigManager（外部可注入已有实例，如桌面 platform head 已创建）
             if (configManager != null)
@@ -140,9 +133,6 @@ namespace Heartbeat.Desktop.Windows.Hosting
                     statusRegistry: sp.GetRequiredService<UploadStatusRegistry>(),
                     compatibilityStatus: sp.GetRequiredService<ClientCompatibilityStatus>());
             });
-
-            // 自启动服务
-            services.AddSingleton<IAutoStartService, RegistryAutoStartService>();
 
             // 托管后台服务。停止顺序为注册的逆序：输入 hook 最后注册、最先停止，随后
             // system Binding 停止并推入终态快照，最后由 UploadWorker 的最终 drain 带走（ADR-020）。

@@ -1,3 +1,4 @@
+using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Desktop.Mac.Configuration;
 using Heartbeat.Desktop.Mac;
 using Heartbeat.Desktop.UI.Presentation;
@@ -112,14 +113,14 @@ public sealed class MacDesktopStateTests : IDisposable
     }
 
     [Fact]
-    public void ExistingLoginStartRegistration_IsRewrittenToCurrentExecutableOnStartup()
+    public void ReadingState_DoesNotRewriteInstallation()
     {
         var login = new FakeLoginStart(isEnabled: true);
 
         using var state = Build(login);
 
-        Assert.Equal(Environment.ProcessPath, login.EnabledExecutable);
-        Assert.Equal(1, login.EnableCount);
+        Assert.Null(login.EnabledExecutable);
+        Assert.Equal(0, login.EnableCount);
     }
 
     private MacDesktopState Build(
@@ -157,7 +158,7 @@ public sealed class MacDesktopStateTests : IDisposable
             Directory.Delete(_root, recursive: true);
     }
 
-    private sealed class FakeLoginStart : IMacLoginStart
+    private sealed class FakeLoginStart : IDesktopLoginStart
     {
         public FakeLoginStart(bool isEnabled = false) => IsEnabled = isEnabled;
 

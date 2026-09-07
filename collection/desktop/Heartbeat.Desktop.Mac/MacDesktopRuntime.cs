@@ -6,7 +6,6 @@ using Heartbeat.Desktop.UI.Logging;
 using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Desktop.UI.Presentation;
 using Heartbeat.Desktop.UI.Views;
-using Heartbeat.Desktop.Updater.Velopack;
 using Heartbeat.Collection.Hub.Collectors.Packages;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -15,8 +14,6 @@ namespace Heartbeat.Desktop.Mac;
 
 public sealed class MacDesktopRuntime : IWindowController, IDesktopApplicationParticipant
 {
-    private const string ReleaseChannel = "osx-arm64-stable";
-
     private readonly DesktopApplicationLifetime _application;
     private IClassicDesktopStyleApplicationLifetime? _lifetime;
     private MainWindow? _window;
@@ -30,13 +27,13 @@ public sealed class MacDesktopRuntime : IWindowController, IDesktopApplicationPa
         LogFeed = logFeed;
         CollectorMarketplace = new DesktopCollectorMarketplace(
             host.Services.GetRequiredService<ICollectorMarketplace>());
-        Updates = new VelopackUpdateController(ReleaseChannel, PrepareForUpdateAsync);
+        Updates = host.Services.GetRequiredService<DesktopInstallation>().CreateUpdates(PrepareForUpdateAsync);
         _application.Attach(this);
         Updates.Start();
     }
 
     public MacDesktopState DesktopState { get; }
-    public VelopackUpdateController Updates { get; }
+    public IDesktopUpdates Updates { get; }
     public RingBufferSink LogFeed { get; }
     public DesktopCollectorMarketplace CollectorMarketplace { get; }
     public bool IsShutdownPrepared => _application.IsShutdownPrepared;

@@ -80,6 +80,8 @@ DTO 或端点变更按 [API 导读](api.md#客户端重新生成) 重新生成�
 
 ```bash
 dotnet run --project tools/Heartbeat.Verification -- run headless-main
+# 已登录图形会话中验证 Reference → Desktop → Analytics
+dotnet run --project tools/Heartbeat.Verification -- run desktop-main
 ```
 
 命令读取 `.local/heartbeat-headless.json` 的 API key 与管理身份配置，Auth 使用线上服务；自动构建

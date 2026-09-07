@@ -79,6 +79,8 @@ public sealed record DesktopStateSnapshot(
     IReadOnlyDictionary<string, UploadStreamStatus> UploadStreams,
     DesktopCapabilitySnapshot Capabilities)
 {
+    public bool LoginStartSupported { get; init; } = true;
+
     public static DesktopStateSnapshot Empty { get; } = new(
         null,
         DesktopSettingsSnapshot.Default,

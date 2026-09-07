@@ -106,6 +106,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<MarketplaceCollectorItemViewModel> MarketplaceCollectors { get; } = [];
     public ObservableCollection<OperationalNoticeViewModel> OperationalNotices { get; } = [];
     public bool UpdatesSupported { get; }
+    public bool LoginStartSupported => _desktopState.Current.LoginStartSupported;
     public bool IsOverviewSelected => SelectedPage == MainPage.Overview;
     public bool IsCollectorsSelected => SelectedPage == MainPage.Collectors;
     public bool IsSettingsSelected => SelectedPage == MainPage.Settings;

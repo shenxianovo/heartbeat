@@ -1,3 +1,4 @@
+using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Collection.Hub.Http;
 using Heartbeat.Collection.Hub.Presence;
 using Heartbeat.Collection.Hub.Upload;
@@ -38,7 +39,7 @@ public sealed class WindowsDesktopStateTests : IDisposable
     }
 
     [Fact]
-    public void ExistingLoginStartRegistration_IsRewrittenToCurrentExecutableOnStartup()
+    public void ReadingState_DoesNotRewriteInstallation()
     {
         Directory.CreateDirectory(_root);
         var config = new ConfigManager(Path.Combine(_root, "config.json"));
@@ -51,8 +52,8 @@ public sealed class WindowsDesktopStateTests : IDisposable
             new ClientCompatibilityStatus(),
             new UploadStatusRegistry());
 
-        Assert.Equal(Environment.ProcessPath, login.EnabledExecutable);
-        Assert.Equal(1, login.EnableCount);
+        Assert.Null(login.EnabledExecutable);
+        Assert.Equal(0, login.EnableCount);
     }
 
     public void Dispose()
@@ -69,7 +70,7 @@ public sealed class WindowsDesktopStateTests : IDisposable
         public event Action<CurrentActivity?>? CurrentActivityChanged { add { } remove { } }
     }
 
-    private sealed class FakeAutoStart : IAutoStartService
+    private sealed class FakeAutoStart : IDesktopLoginStart
     {
         public FakeAutoStart(bool isEnabled = false) => IsEnabled = isEnabled;
 

@@ -9,8 +9,10 @@ public sealed class ReferencePackageBuilderTests : IDisposable
         Path.GetTempPath(),
         $"heartbeat-reference-builder-{Guid.NewGuid():N}");
 
-    [Fact]
-    public void Create_ProducesCurrentManagedProcessArtifactAndAccountOutput()
+    [Theory]
+    [InlineData("account")]
+    [InlineData("machine")]
+    public void Create_ProducesConsistentManifestAndClientSubject(string subjectKind)
     {
         var source = Path.Combine(_root, "source");
         var package = Path.Combine(_root, "package");
@@ -26,13 +28,15 @@ public sealed class ReferencePackageBuilderTests : IDisposable
             Path.Combine(AppContext.BaseDirectory, "contracts", "facts", "reference-segment.schema.json"),
             Path.Combine(contractDirectory, "reference-segment.schema.json"));
 
-        ReferencePackageBuilder.Create(source, package);
+        ReferencePackageBuilder.Create(source, package, subjectKind);
 
         var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(package, "collector-manifest.json")))!;
         Assert.Equal("managedProcess", manifest["artifacts"]![0]!["selector"]!["driver"]!.GetValue<string>());
         Assert.Equal(CurrentOperatingSystem(), manifest["artifacts"]![0]!["selector"]!["os"]![0]!.GetValue<string>());
         Assert.Equal(CurrentArchitecture(), manifest["artifacts"]![0]!["selector"]!["arch"]![0]!.GetValue<string>());
-        Assert.Equal("account", manifest["outputs"]![0]!["subjectKinds"]![0]!.GetValue<string>());
+        Assert.Equal(subjectKind, manifest["outputs"]![0]!["subjectKinds"]![0]!.GetValue<string>());
+        Assert.Equal(subjectKind, File.ReadAllText(Path.Combine(package, "reference-subject-kind.txt")));
+        Assert.Equal(subjectKind, manifest["defaultInstance"]!["subjectKind"]!.GetValue<string>());
         Assert.True(File.Exists(Path.Combine(package, "schemas", "reference-segment.schema.json")));
     }
 

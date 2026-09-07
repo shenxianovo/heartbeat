@@ -1,6 +1,7 @@
 using Heartbeat.Desktop.Mac.Configuration;
 using Heartbeat.Core;
 using Heartbeat.Desktop.UI.Presentation;
+using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Collection.Hub.Http;
 using Heartbeat.Collection.Hub.Presence;
 using Heartbeat.Collection.Hub.Upload;
@@ -14,7 +15,7 @@ public sealed class MacDesktopState : IDesktopState, IDisposable
 {
     private readonly MacConfigManager _config;
     private readonly ICollectionStatus _collection;
-    private readonly IMacLoginStart _loginStart;
+    private readonly IDesktopLoginStart _loginStart;
     private readonly IClientCompatibilityStatus _compatibility;
     private readonly IUploadStatus _uploads;
     private readonly IMacAccessibilityEvents _accessibility;
@@ -24,7 +25,7 @@ public sealed class MacDesktopState : IDesktopState, IDisposable
     public MacDesktopState(
         MacConfigManager config,
         ICollectionStatus collection,
-        IMacLoginStart loginStart,
+        IDesktopLoginStart loginStart,
         IClientCompatibilityStatus compatibility,
         IUploadStatus uploads,
         IMacAccessibilityEvents accessibility,
@@ -39,7 +40,6 @@ public sealed class MacDesktopState : IDesktopState, IDisposable
         _accessibility = accessibility;
         _inputMonitoring = inputMonitoring;
         _applicationLocator = applicationLocator;
-        ReconcileLoginStartRegistration();
         _config.ConfigChanged += OnConfigChanged;
         _collection.CurrentActivityChanged += OnCurrentActivityChanged;
         _compatibility.Changed += OnCompatibilityChanged;
@@ -110,12 +110,6 @@ public sealed class MacDesktopState : IDesktopState, IDisposable
     public void SetThemeMode(DesktopThemeMode mode) =>
         _config.Update(config => config.ThemeMode = mode.ToString());
 
-    private void ReconcileLoginStartRegistration()
-    {
-        if (_loginStart.IsEnabled && Environment.ProcessPath is { Length: > 0 } executable)
-            _loginStart.Enable(executable);
-    }
-
     private DesktopStateSnapshot BuildSnapshot()
     {
         var config = _config.Current;
@@ -129,7 +123,7 @@ public sealed class MacDesktopState : IDesktopState, IDisposable
             _loginStart.IsEnabled,
             _compatibility.Current,
             _uploads.Snapshot,
-            BuildCapabilities(config));
+            BuildCapabilities(config)) { LoginStartSupported = _loginStart.IsSupported };
     }
 
     private DesktopCapabilitySnapshot BuildCapabilities(MacAgentConfig config) => new(

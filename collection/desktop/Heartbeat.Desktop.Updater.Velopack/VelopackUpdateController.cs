@@ -1,4 +1,5 @@
 using Heartbeat.Desktop.UI.Presentation;
+using Heartbeat.Desktop.UI.Hosting;
 using Serilog;
 using Velopack;
 using Velopack.Sources;
@@ -19,7 +20,7 @@ public interface IReleaseUpdateClient
     void ScheduleUpdateAndExit(IReleaseUpdate release);
 }
 
-public sealed class VelopackUpdateController : IUpdateController, IDisposable
+public sealed class VelopackUpdateController : IDesktopUpdates
 {
     public const string RepositoryUrl = "https://github.com/shenxianovo/Heartbeat";
 

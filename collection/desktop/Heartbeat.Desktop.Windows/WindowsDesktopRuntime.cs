@@ -2,14 +2,12 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input.Platform;
 using Avalonia.Threading;
-using System.Runtime.InteropServices;
 using Heartbeat.Desktop.Windows.Configuration;
 using Heartbeat.Desktop.Windows.Utils;
 using Heartbeat.Desktop.UI.Logging;
 using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Desktop.UI.Presentation;
 using Heartbeat.Desktop.UI.Views;
-using Heartbeat.Desktop.Updater.Velopack;
 using Heartbeat.Collection.Hub.Http;
 using Heartbeat.Collection.Hub.Presence;
 using Heartbeat.Collection.Hub.Upload;
@@ -38,22 +36,19 @@ public sealed class WindowsDesktopRuntime : IWindowController, IDesktopApplicati
         DesktopState = new WindowsDesktopState(
             config,
             host.Services.GetRequiredService<ICollectionStatus>(),
-            host.Services.GetRequiredService<IAutoStartService>(),
+            host.Services.GetRequiredService<IDesktopLoginStart>(),
             host.Services.GetRequiredService<IClientCompatibilityStatus>(),
             host.Services.GetRequiredService<IUploadStatus>(),
             host.Services.GetRequiredService<InputObservationStatus>());
         CollectorMarketplace = new DesktopCollectorMarketplace(
             host.Services.GetRequiredService<ICollectorMarketplace>());
-        var channel = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
-            ? "win-arm64"
-            : "win-x64";
-        Updates = new VelopackUpdateController(channel, PrepareForUpdateAsync);
+        Updates = host.Services.GetRequiredService<DesktopInstallation>().CreateUpdates(PrepareForUpdateAsync);
         _application.Attach(this);
         Updates.Start();
     }
 
     public WindowsDesktopState DesktopState { get; }
-    public VelopackUpdateController Updates { get; }
+    public IDesktopUpdates Updates { get; }
     public RingBufferSink LogFeed { get; }
     public DesktopCollectorMarketplace CollectorMarketplace { get; }
     public bool IsShutdownPrepared => _application.IsShutdownPrepared;

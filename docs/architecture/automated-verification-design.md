@@ -101,6 +101,58 @@ Reference 通过现有 apphost 的 `--create-package` 创建当前平台 Package
 
 上述机器相关报告位于 `.local/verification/<run-id>/report.json`，不进入版本控制。首版真实运行平台是 macOS；其他操作系统与 Desktop 链路不由这些结果推定已验收。实现未新增生产服务自检端点，也未改变 Auth 或 Collector 的生产协议。
 
+## Desktop 开发、验收与 Release（已实施）
+
+见 [ADR-053](../adr/053-desktop-profile-and-installation-ownership.md)。两个平台入口复用
+`DesktopBootstrap`，先解析运行目录，再取得独占权，之后才创建日志、配置和 Host。独占使用
+实际文件锁而非 runId 派生 Mutex，目录符号链接和大小写别名不能绕过保护；默认目录同时保留
+旧版 Mutex。Windows 原有“创建锁失败仍继续”的路径已经移除。竞争返回 3，锁创建错误以异常
+停止；启动 smoke 竞争仍报告 inconclusive 并返回 1。
+
+`--data-directory PATH` 是普通启动参数，既可用于持久开发目录，也可用于一次验收。目录内仍用
+现有 config.json、Collector Package/Runtime、缓存和日志布局；Analytics 地址继续通过
+`HEARTBEAT_API_BASE_URL` 提供，ExternalHost 监听沿用 config.json 的 `ingestPort`。首条
+Desktop 场景设为 0，避免同日常客户端竞争 loopback 端口；将来的 ExternalHost 场景需显式指定
+端口与连接目标。
+
+`DesktopInstallation` 持有自启动端口和更新工厂。显式 Profile 和 smoke 只能使用 detached
+adapter；即使执行文件来自真实安装也不授予写入能力。普通启动还需 Velopack 的安装识别才可
+绑定安装。DesktopState 构造只建立状态和订阅，自启动注册协调由安装对象显式执行。独立运行
+的自启动开关和更新入口显示不可用，底层拒绝自启动写入，更新返回 Skipped。
+
+`DesktopProcessControl` 提供目录内的本地进程观察与退出入口：原生 UI 消息循环执行回调后才
+写 `desktop-status.json`（PID、UI readiness、自启动/更新能力）；创建 `desktop-stop` 请求现有
+`DesktopApplicationLifetime` 完成正常退出。SIGTERM/Ctrl+C 也进入同一退出事务。它没有另建
+Host、Collector 生命周期或远程管理服务。运行期间只有该 Profile 的使用者应写这些文件。
+
+验收器提供 `headless-main` 和 `desktop-main`，共用 `MainPathScenario` 的 Auth、空数据基线、
+事实断言和 owner 验证。Desktop 场景先用该制品现有 startup smoke 获取真实 Machine UUID，
+再通过正式 Installation/Runtime API 准备 Machine Instance，启动真实 Desktop 和原生 UI。
+Reference 包可以生成 Account/Machine 两个版本，声明与协议客户端使用相同 Subject kind；固定
+的 `reference.account` Source/标题保留为既有测试事实，不用它推断 Subject。身份断言单独验证
+Desktop 的真实 Machine UUID，Headless 则验证 Account 的服务端映射。
+
+每个服务可用 `--artifact SERVICE=PATH` 指定已有制品，跳过对应 publish，支持 Desktop `.app`
+或可执行文件，以及 Analytics/Headless DLL。`VerificationArtifact` 解析制品并记录版本和整个
+目录的内容 hash，随后使用相同准备和运行阶段。指定制品不复制、不重新构建，也不安装到日常
+使用位置。Release workflow 可在既有解包步骤后调用这一入口，不改变独立发布单元。
+
+Desktop 场景确认 UI 已运行且安装能力均关闭，退出后单独断言 Desktop 返回 0，再回收进程组和
+数据库；保留脱敏后的 Desktop 文件日志。清理失败会保留现场并返回非零。主链路通过不表示
+Setup、自启动、权限授权或 vA→vB 更新已验收，仍需各平台真实安装设备证据。
+
+## Desktop 验证证据（2026-09-07）
+
+- 当前源码：`20260907t125251-8550f246`，Reference → 原生 Desktop → Analytics 通过，正常退出与清理通过。同机已安装客户端 PID 38562 继续运行；对正在验收的同一 Profile 再次启动返回 3。
+- Velopack 打包、解包后的 `.app`：`20260907t130105-eec14bba`、`20260907t130335-95d11874` 两次通过，未重新构建 Desktop。后一报告记录版本 `0.0.2-verification.1+da70af86dfd5aeb6db305737035a053503ee4e55`；两次制品树 hash 相同：`sha256:c612e5c946eddf0d70d4a76fcda12a8a700c544dd9e78fa1c6d784f3f1a5d15e`。UI readiness、安装能力关闭、真实 Machine 映射、正常退出码 0 均有报告证据。
+- Headless 回归：`20260907t130105-e259538e` 通过，清理通过。
+- 确定性断链（TCP reset）：`20260907t130540-1a4c1e65` 的 delivery 在 90 秒后按预期失败，退出码 1；Desktop 正常退出码 0，清理通过。
+- `.app` 验收前后，日常 `config.json` 与 LaunchAgent plist 的 SHA-256 指纹相同；正常运行证据无 API key 泄露，除网络黑洞失败现场外均已删除 work。
+- 全量 `dotnet test Heartbeat.slnx --no-restore`：13 个测试程序集共 1182 项通过，包括验证器 19 项、共享 UI 57 项、Mac 79 项、Windows 38 项。Windows 测试在 macOS 的 .NET 运行时执行，不等于 Windows 原生设备验收。
+- 原故障端点（绑定但不 listen 的 Socket）在 macOS 上造成 TCP 连接长时间等待：`20260907t130149-efa1c830` 的 delivery 超时，正常退出超过 30 秒。验证器随后强制回收进程组和数据库，保留 work 和失败日志。这个结果不计为干净退出通过，也不因普通链路成功而关闭；后续退出责任验证需覆盖长期无响应请求及最终缓存完成。当前 `disconnect-upload` 改为独占 listener 接受后立即 reset，使故障语义确定为连接失败；它不覆盖网络黑洞。
+
+上述真实链路平台均为 macOS。`.app` 使用现有发布参数在本机打包，仅在独立目录执行，未安装或发布。Setup、真实权限、自启动注册和 vA→vB 更新仍待各自设备验收。
+
 ## 现有架构约束
 
 遵循 ADR-048/049：Desktop 与 Headless 共享 Runtime，但保留真实宿主差异；通用宿主不认识具名可选 Collector。验收场景不能为方便测试把参考采集器写死进宿主组合。

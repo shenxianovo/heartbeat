@@ -10,11 +10,11 @@ internal static class VerificationCommand
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(directory,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var redactor = new SecretRedactor();
-        var report = new RunReport(runId, directory, redactor);
+        var report = new RunReport(runId, directory, redactor) { Scenario = options.Scenario };
         var lane = new VerificationLane(options, report, directory, redactor);
         Directory.CreateDirectory(lane.WorkPath);
         Console.WriteLine($"Run {runId}\nEvidence: {directory}");
-        using var scenario = new HeadlessMainScenario(options, lane, report, redactor);
+        using var scenario = new MainPathScenario(options, lane, report, redactor);
         try
         {
             await Stage("configuration", scenario.LoadConfigurationAsync);
@@ -29,7 +29,7 @@ internal static class VerificationCommand
             await Stage("database", lane.StartDatabaseAsync);
             await Stage("analytics-start", token => lane.StartAnalyticsAsync(scenario.AnalyticsAuth(), token));
             await Stage("prepare", scenario.PrepareAsync);
-            await Stage("headless-start", scenario.StartAsync);
+            await Stage(options.IsDesktop ? "desktop-start" : "headless-start", scenario.StartAsync);
             await Stage("delivery", scenario.AssertDeliveryAsync);
             report.Status = "passed";
         }

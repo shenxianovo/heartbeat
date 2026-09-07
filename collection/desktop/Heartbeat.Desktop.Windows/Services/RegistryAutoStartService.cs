@@ -1,3 +1,4 @@
+using Heartbeat.Desktop.UI.Hosting;
 using Microsoft.Win32;
 using Serilog;
 using System.Runtime.Versioning;
@@ -5,7 +6,7 @@ using System.Runtime.Versioning;
 namespace Heartbeat.Desktop.Windows.Services
 {
     [SupportedOSPlatform("windows")]
-    public class RegistryAutoStartService : IAutoStartService
+    public class RegistryAutoStartService : IDesktopLoginStart
     {
         private const string RegistryKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string AppName = "Heartbeat";

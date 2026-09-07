@@ -8,6 +8,14 @@ if (args is ["--create-package", var packageDirectory])
     return;
 }
 
+if (args is ["--create-package", var machinePackageDirectory, "--subject-kind", var kind])
+{
+    ReferencePackageBuilder.Create(AppContext.BaseDirectory, machinePackageDirectory, kind);
+    return;
+}
+
+var subjectKindPath = Path.Combine(AppContext.BaseDirectory, "reference-subject-kind.txt");
+var subjectKind = File.Exists(subjectKindPath) ? File.ReadAllText(subjectKindPath).Trim() : "account";
 var behavior = Environment.GetEnvironmentVariable("HEARTBEAT_REFERENCE_BEHAVIOR");
 if (RawReferenceProtocolProbe.Handles(behavior))
 {
@@ -32,7 +40,7 @@ var requiredCapabilities = new HashSet<string>(StringComparer.Ordinal)
 var definition = new CollectorClientDefinition(
     "reference.managed",
     capabilities,
-    "account",
+    subjectKind,
     [new CollectorOutputBinding(
         "activity",
         "activity",

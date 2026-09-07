@@ -63,7 +63,7 @@ public partial class App : Application
         var openItem = new NativeMenuItem("打开设置");
         openItem.Click += (_, _) => Runtime.ShowSettings();
 
-        var checkItem = new NativeMenuItem("检查更新");
+        var checkItem = new NativeMenuItem("检查更新") { IsEnabled = Runtime.Updates.IsSupported };
         checkItem.Click += async (_, _) =>
         {
             var result = await Runtime.Updates.CheckAsync();

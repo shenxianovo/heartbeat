@@ -1,3 +1,4 @@
+using Heartbeat.Desktop.UI.Hosting;
 using System.Runtime.InteropServices;
 using System.Security;
 using Heartbeat.Desktop.Mac.Native;
@@ -5,15 +6,8 @@ using Serilog;
 
 namespace Heartbeat.Desktop.Mac;
 
-public interface IMacLoginStart
-{
-    bool IsEnabled { get; }
-    void Enable(string executablePath);
-    void Disable();
-}
-
 /// <summary>每用户 LaunchAgent adapter；管理 ~/Library 与当前 GUI launchd domain，不需要管理员权限。</summary>
-public sealed class LaunchAgentLoginStart : IMacLoginStart
+public sealed class LaunchAgentLoginStart : IDesktopLoginStart
 {
     private const string Label = "com.shenxianovo.heartbeat";
     private const string LaunchCtlPath = "/bin/launchctl";

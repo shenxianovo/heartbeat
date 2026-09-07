@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="../../server/Heartbeat.Server/Heartbeat.Server.csproj" />
     <ProjectReference Include="../../collection/hub/Heartbeat.Collection.Headless/Heartbeat.Collection.Headless.csproj" />
+    <ProjectReference Include="../../collection/desktop/Heartbeat.Desktop.UI/Heartbeat.Desktop.UI.csproj" />
     <InternalsVisibleTo Include="Heartbeat.Verification.Tests" />
   </ItemGroup>
 </Project>

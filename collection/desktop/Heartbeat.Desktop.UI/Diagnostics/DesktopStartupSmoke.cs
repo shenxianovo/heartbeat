@@ -133,6 +133,7 @@ public static class DesktopStartupSmoke
             using var cancellation = new CancellationTokenSource(budget);
             host.StartAsync(cancellation.Token).GetAwaiter().GetResult();
             report["hostStarted"] = true;
+            report["hardwareId"] = host.Services.GetService<Heartbeat.Collection.Hub.Configuration.IDeviceIdentity>()?.HardwareId;
 
             // System 是宿主唯一写死的 BuiltIn Collector，它的 runtime 缺席就说明组合坏了。
             var systemComposed = host.Services.GetService<CollectorRuntime>() is not null;

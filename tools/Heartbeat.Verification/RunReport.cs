@@ -25,7 +25,7 @@ internal sealed class RunReport(string runId, string directory, SecretRedactor r
 {
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     public string RunId { get; } = runId;
-    public string Scenario => "headless-main";
+    public string Scenario { get; init; } = "headless-main";
     public string Status { get; set; } = "running";
     public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? FinishedAt { get; set; }

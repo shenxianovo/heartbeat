@@ -3,6 +3,7 @@ using Heartbeat.Desktop.Windows.Models;
 using Heartbeat.Desktop.Windows.Services;
 using Heartbeat.Core;
 using Heartbeat.Desktop.UI.Presentation;
+using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Collection.Hub.Http;
 using Heartbeat.Collection.Hub.Presence;
 using Heartbeat.Collection.Hub.Upload;
@@ -13,7 +14,7 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
 {
     private readonly ConfigManager _config;
     private readonly ICollectionStatus _collection;
-    private readonly IAutoStartService _loginStart;
+    private readonly IDesktopLoginStart _loginStart;
     private readonly IClientCompatibilityStatus _compatibility;
     private readonly IUploadStatus _uploads;
     private readonly InputObservationStatus _input;
@@ -21,7 +22,7 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
     public WindowsDesktopState(
         ConfigManager config,
         ICollectionStatus collection,
-        IAutoStartService loginStart,
+        IDesktopLoginStart loginStart,
         IClientCompatibilityStatus compatibility,
         IUploadStatus uploads, InputObservationStatus? input = null)
     {
@@ -33,7 +34,6 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
         _compatibility = compatibility;
         _uploads = uploads;
 
-        ReconcileLoginStartRegistration();
         _config.ConfigChanged += HandleConfigChanged;
         _collection.CurrentActivityChanged += HandleCurrentActivityChanged;
         _compatibility.Changed += HandleCompatibilityChanged;
@@ -90,16 +90,6 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
     public void SetThemeMode(DesktopThemeMode mode) =>
         _config.Update(config => config.ThemeMode = mode.ToString());
 
-    private void ReconcileLoginStartRegistration()
-    {
-        if (!_loginStart.IsEnabled)
-            return;
-
-        var executablePath = Environment.ProcessPath;
-        if (!string.IsNullOrWhiteSpace(executablePath))
-            _loginStart.Enable(executablePath);
-    }
-
     private DesktopStateSnapshot BuildSnapshot()
     {
         var config = _config.Current;
@@ -126,7 +116,7 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
                 [SystemCapability.InputEventRecording] = new(
                     config.InputEventRecordingEnabled,
                     _input.IsAvailable ? CapabilityAvailability.Available : CapabilityAvailability.Unavailable),
-            }));
+            })) { LoginStartSupported = _loginStart.IsSupported };
     }
 
     private static DesktopThemeMode ParseThemeMode(string? value) =>

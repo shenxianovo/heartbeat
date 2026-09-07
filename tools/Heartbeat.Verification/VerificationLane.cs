@@ -8,8 +8,13 @@ namespace Heartbeat.Verification;
 internal sealed class VerificationLane(VerificationOptions options, RunReport report,
     string directory, SecretRedactor redactor)
 {
+    private readonly Dictionary<string, VerificationArtifact> _artifacts = [];
+    public VerificationArtifact Artifact(string service) => _artifacts[service];
+    public string DesktopData => Path.Combine(WorkPath, "desktop-data");
+
     private readonly List<OwnedProcess> _services = [];
-    private Socket? _disconnectedEndpoint;
+    private TcpListener? _disconnectedEndpoint;
+    private Task? _rejections;
     private bool _databaseAttempted;
     public string DirectoryPath => directory;
     public string WorkPath { get; } = Path.Combine(directory, "work");
@@ -28,14 +33,29 @@ internal sealed class VerificationLane(VerificationOptions options, RunReport re
 
     public async Task BuildAsync(CancellationToken token)
     {
-        foreach (var (name, project) in new[]
+        if (options.IsDesktop && !OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows())
+            throw new DependencyBlockedException("Desktop requires a logged-in macOS or Windows desktop session.");
+        var desktop = OperatingSystem.IsMacOS() ? "Mac" : "Windows";
+        foreach (var (name, project, entrypoint) in new[]
         {
-            ("analytics", "server/Heartbeat.Server"),
-            ("headless", "collection/hub/Heartbeat.Collection.Headless"),
-            ("reference", "collection/collectors/Heartbeat.Collector.Reference.ManagedProcess")
+            ("analytics", "server/Heartbeat.Server", "Heartbeat.Server.dll"),
+            options.IsDesktop
+                ? ("desktop", $"collection/desktop/Heartbeat.Desktop.{desktop}", $"Heartbeat.Desktop.{desktop}" + (OperatingSystem.IsWindows() ? ".exe" : ""))
+                : ("headless", "collection/hub/Heartbeat.Collection.Headless", "Heartbeat.Collection.Headless.dll"),
+            ("reference", "collection/collectors/Heartbeat.Collector.Reference.ManagedProcess", "Heartbeat.Collector.Reference.ManagedProcess" + (OperatingSystem.IsWindows() ? ".exe" : ""))
         })
-            await CommandAsync("build-" + name, "dotnet",
-                ["publish", project, "-c", "Release", "-o", Path.Combine(WorkPath, name), "--nologo"], token);
+        {
+            if (!options.Artifacts.TryGetValue(name, out var path))
+            {
+                var output = Path.Combine(WorkPath, name);
+                await CommandAsync("build-" + name, "dotnet",
+                    ["publish", project, "-c", "Release", "-o", output, "--nologo"], token);
+                path = Path.Combine(output, entrypoint);
+            }
+            var artifact = VerificationArtifact.Open(path);
+            _artifacts.Add(name, artifact);
+            report.Evidence[name + "Artifact"] = await artifact.DescribeAsync(token);
+        }
     }
 
     public async Task StartDatabaseAsync(CancellationToken token)
@@ -84,7 +104,7 @@ internal sealed class VerificationLane(VerificationOptions options, RunReport re
             ["Recap__ApiKey"] = "",
             ["Logging__LogLevel__Microsoft.EntityFrameworkCore"] = "Warning"
         };
-        await StartServiceAsync("analytics", "Heartbeat.Server.dll", environment, [], token);
+        await StartServiceAsync("analytics", environment, [], token);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         while (true)
         {
@@ -103,32 +123,60 @@ internal sealed class VerificationLane(VerificationOptions options, RunReport re
 
     public async Task StartHeadlessAsync(string configPath, CancellationToken token)
     {
+        var uploadUrl = AllocateUploadUrl();
+        await StartServiceAsync("headless", RuntimeEnvironment(uploadUrl), [configPath], token);
+    }
+
+    private string AllocateUploadUrl()
+    {
         var uploadUrl = AnalyticsUrl.ToString();
         if (options.DisconnectUpload)
         {
-            // Reserve a local port without listening: connections fail and no unrelated service can bind it.
-            _disconnectedEndpoint = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            _disconnectedEndpoint.Bind(new IPEndPoint(IPAddress.Loopback, 0));
-            uploadUrl = "http://127.0.0.1:" + ((IPEndPoint)_disconnectedEndpoint.LocalEndPoint!).Port;
+            // A bound, non-listening socket blackholes SYN on macOS. Accept then reset instead,
+            // so this fault consistently means disconnected, not a platform-dependent network timeout.
+            _disconnectedEndpoint = new TcpListener(IPAddress.Loopback, 0);
+            _disconnectedEndpoint.Start();
+            uploadUrl = "http://127.0.0.1:" + ((IPEndPoint)_disconnectedEndpoint.LocalEndpoint).Port;
+            _rejections = RejectConnectionsAsync(_disconnectedEndpoint);
         }
         report.Evidence["uploadUrl"] = uploadUrl;
         report.Evidence["fault"] = options.DisconnectUpload ? "disconnect-upload" : null;
-        await StartServiceAsync("headless", "Heartbeat.Collection.Headless.dll", new Dictionary<string, string?>
-        {
-            ["HEARTBEAT_API_BASE_URL"] = uploadUrl,
-            ["HEARTBEAT_REFERENCE_BEHAVIOR"] = null,
-            ["DOTNET_ENVIRONMENT"] = "Production",
-            ["ASPNETCORE_ENVIRONMENT"] = "Production"
-        }, [configPath], token);
+        return uploadUrl;
+    }
+
+    private static Dictionary<string, string?> RuntimeEnvironment(string uploadUrl) => new()
+    {
+        ["HEARTBEAT_API_BASE_URL"] = uploadUrl,
+        ["HEARTBEAT_REFERENCE_BEHAVIOR"] = null,
+        ["DOTNET_ENVIRONMENT"] = "Production",
+        ["ASPNETCORE_ENVIRONMENT"] = "Production"
+    };
+
+    public async Task StartDesktopAsync(CancellationToken token)
+    {
+        await StartServiceAsync("desktop", RuntimeEnvironment(AllocateUploadUrl()),
+            ["--data-directory", DesktopData], token);
+        var status = Path.Combine(DesktopData, "desktop-status.json");
+        while (!File.Exists(status)) { ThrowIfExited(); await Task.Delay(100, token); }
+        using var json = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(status, token));
+        if (!json.RootElement.GetProperty("uiReady").GetBoolean())
+            throw new InvalidOperationException("The native Desktop UI is not ready.");
+        if (json.RootElement.GetProperty("loginStartSupported").GetBoolean()
+            || json.RootElement.GetProperty("updatesSupported").GetBoolean())
+            throw new InvalidOperationException("An isolated Desktop unexpectedly acquired installation capabilities.");
+        report.Evidence["desktopInstallationDetached"] = true;
+        report.Evidence["desktopUiReady"] = true;
+        report.Evidence["desktopPid"] = json.RootElement.GetProperty("pid").GetInt32();
     }
 
     public string AllocateHeadlessUrl() => HeadlessUrl = $"http://127.0.0.1:{FreePort()}";
 
-    private async Task StartServiceAsync(string name, string assembly,
+    private async Task StartServiceAsync(string name,
         IReadOnlyDictionary<string, string?> environment, string[] args, CancellationToken token)
     {
-        var process = OwnedProcess.Start(name, "dotnet", new[] { assembly }.Concat(args),
-            Path.Combine(WorkPath, name), Path.Combine(directory, name + ".log"), redactor,
+        var artifact = Artifact(name);
+        var process = OwnedProcess.Start(name, artifact.Executable, artifact.Arguments.Concat(args),
+            Path.GetDirectoryName(artifact.Path)!, Path.Combine(directory, name + ".log"), redactor,
             environment, Path.Combine(WorkPath, name + "-process"));
         _services.Add(process);
         report.Evidence[name + "SupervisorPid"] = process.Id;
@@ -140,9 +188,33 @@ internal sealed class VerificationLane(VerificationOptions options, RunReport re
     public async Task CleanupAsync()
     {
         report.Cleanup = "running";
+        if (options.IsDesktop && File.Exists(Path.Combine(DesktopData, "desktop-status.json")))
+        {
+            await AttemptAsync("desktop graceful exit", async () =>
+            {
+                await File.WriteAllTextAsync(Path.Combine(DesktopData, "desktop-stop"), "stop");
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                var exit = Path.Combine(WorkPath, "desktop-process.exit");
+                while (!File.Exists(exit)) await Task.Delay(100, deadline.Token);
+                var code = (await File.ReadAllTextAsync(exit, deadline.Token)).Trim();
+                report.Evidence["desktopExitCode"] = code;
+                if (code != "0") throw new InvalidOperationException("Desktop did not exit cleanly: " + code);
+            });
+        }
+        await AttemptAsync("desktop logs", async () =>
+        {
+            if (Directory.Exists(Path.Combine(DesktopData, "logs")))
+                foreach (var log in System.IO.Directory.EnumerateFiles(Path.Combine(DesktopData, "logs")))
+                    await File.WriteAllTextAsync(Path.Combine(directory, "desktop-" + Path.GetFileName(log)),
+                        redactor.Redact(await File.ReadAllTextAsync(log)));
+        });
         foreach (var process in _services.AsEnumerable().Reverse())
             await AttemptAsync(process.Name, async () => await process.DisposeAsync());
-        _disconnectedEndpoint?.Dispose();
+        if (_disconnectedEndpoint is not null)
+        {
+            _disconnectedEndpoint.Stop();
+            if (_rejections is not null) await _rejections;
+        }
         if (_databaseAttempted)
         {
             // Collect logs independently: failure must not prevent removal.
@@ -169,6 +241,19 @@ internal sealed class VerificationLane(VerificationOptions options, RunReport re
         {
             try { await cleanup(); }
             catch (Exception exception) { report.CleanupErrors.Add(redactor.Redact(resource + ": " + exception.Message)); }
+        }
+    }
+
+    private static async Task RejectConnectionsAsync(TcpListener listener)
+    {
+        while (true)
+        {
+            try
+            {
+                using var connection = await listener.AcceptSocketAsync();
+                connection.LingerState = new LingerOption(true, 0);
+            }
+            catch (Exception exception) when (exception is SocketException or ObjectDisposedException) { return; }
         }
     }
 

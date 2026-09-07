@@ -8,6 +8,14 @@
 桌面采集宿主：承载 Collector Runtime、system Collector、通用 ExternalHost loopback 监听、集面读模型以及统一缓存/上传。它不再提供通用 source 级 loopback segment ingress，也不认识任何具名可选 Collector（ADR-049）。
 _Avoid_: Service, Worker（这些是 Agent 内部的实现层）
 
+**Desktop Profile（运行目录）**:
+一次 Desktop 使用所依托的持久数据集合，包含配置、Collector Instance、Secret、缓存与日志。同一 Profile 只有一个运行者；它不表示新的 Machine，也不等于一次验收的运行标识。
+_Avoid_: 测试用户、虚拟设备、runId
+
+**Desktop Installation Binding（安装绑定）**:
+Desktop 运行者对当前真实安装的自启动注册和更新目标所持有的管理能力。独立 Profile 不因使用已安装的执行文件而获得该能力。
+_Avoid_: Release 模式、测试模式
+
 **Collector（采集器）**:
 一个观测特定应用内活动并通过 Collector Protocol 向 Runtime 发布 Fact 的组件（browser 扩展、VRChat 账号采集器等）。system 采集器内置于 Desktop，同样经 Runtime 汇入，特例性仅剩两点：进程内 binding、不可停用。非内置采集器代码位于 `collection/collectors/`。
 _Avoid_: 插件/Plugin（口语别名，UI 与文档统一用"采集器"；ADR-017 等历史文档中的 plugin 即此概念）

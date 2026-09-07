@@ -34,7 +34,7 @@ internal static class ReferenceExpectation
     }
 }
 
-internal sealed class HeadlessMainScenario(VerificationOptions options, VerificationLane lane,
+internal sealed class MainPathScenario(VerificationOptions options, VerificationLane lane,
     RunReport report, SecretRedactor redactor) : IDisposable
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
@@ -101,18 +101,18 @@ internal sealed class HeadlessMainScenario(VerificationOptions options, Verifica
 
     public async Task PrepareAsync(CancellationToken token)
     {
-        var referenceDirectory = Path.Combine(lane.WorkPath, "reference");
-        var executable = Path.Combine(referenceDirectory, "Heartbeat.Collector.Reference.ManagedProcess" +
-            (OperatingSystem.IsWindows() ? ".exe" : ""));
+        var reference = lane.Artifact("reference");
         var source = Path.Combine(lane.WorkPath, "package-source");
-        await lane.CommandAsync("reference-package", executable, ["--create-package", source], token);
-        var data = Path.Combine(lane.WorkPath, "headless-data");
+        await lane.CommandAsync("reference-package", reference.Executable,
+            reference.Arguments.Concat(options.IsDesktop
+                ? new[] { "--create-package", source, "--subject-kind", "machine" } : new[] { "--create-package", source }), token);
+        var data = options.IsDesktop ? lane.DesktopData : Path.Combine(lane.WorkPath, "headless-data");
+        _subjectId = options.IsDesktop ? await PrepareDesktopAsync(token) : Guid.CreateVersion7();
         var installation = new CollectorPackageInstallations(Path.Combine(data, "collector-packages")).Install(source);
-        _subjectId = Guid.CreateVersion7();
         using (var runtime = CollectorRuntime.Open(Path.Combine(data, "collector-runtime.json"), new PreparationSink()))
         {
             var instance = runtime.CreateInstance(installation.Package,
-                new SubjectReference(_subjectId, SubjectKind.Account),
+                new SubjectReference(_subjectId, options.IsDesktop ? SubjectKind.Machine : SubjectKind.Account),
                 new CollectorInstanceSpec(1, 1, JsonSerializer.SerializeToElement(new { })), "default");
             report.Evidence["collectorInstanceId"] = instance.CollectorInstanceId;
         }
@@ -125,22 +125,55 @@ internal sealed class HeadlessMainScenario(VerificationOptions options, Verifica
         if (await db.ActivitySegments.AnyAsync(token))
             throw new InvalidOperationException("The new lane already contains Segments; refusing a possibly stale baseline.");
 
-        var config = new HeadlessFleetOptions
+        if (!options.IsDesktop)
         {
-            ApiKey = _sourceConfig.ApiKey, DataDirectory = data, Management = _sourceConfig.Management,
-            UploadIntervalSeconds = 1, CollectorStartupTimeoutSeconds = 15, CollectorDrainGraceSeconds = 3,
-            ListenUrl = lane.AllocateHeadlessUrl()
-        };
-        config.Validate();
-        _headlessConfig = Path.Combine(lane.WorkPath, "headless.json");
-        await File.WriteAllTextAsync(_headlessConfig, JsonSerializer.Serialize(config, RunReport.Json), token);
-        VerificationLane.RestrictFile(_headlessConfig);
+            var config = new HeadlessFleetOptions
+            {
+                ApiKey = _sourceConfig.ApiKey, DataDirectory = data, Management = _sourceConfig.Management,
+                UploadIntervalSeconds = 1, CollectorStartupTimeoutSeconds = 15, CollectorDrainGraceSeconds = 3,
+                ListenUrl = lane.AllocateHeadlessUrl()
+            };
+            config.Validate();
+            _headlessConfig = Path.Combine(lane.WorkPath, "headless.json");
+            await File.WriteAllTextAsync(_headlessConfig, JsonSerializer.Serialize(config, RunReport.Json), token);
+            VerificationLane.RestrictFile(_headlessConfig);
+        }
         var baseline = await QueryAsync(token);
         if (baseline.Count != 0) throw new InvalidOperationException("The initial API query is not empty.");
         await report.WriteAsync("baseline.json", baseline);
     }
 
-    public Task StartAsync(CancellationToken token) => lane.StartHeadlessAsync(_headlessConfig, token);
+    private async Task<Guid> PrepareDesktopAsync(CancellationToken token)
+    {
+        Directory.CreateDirectory(lane.DesktopData);
+        var configPath = Path.Combine(lane.DesktopData, "config.json");
+        // Existing platform config fields; native optional permissions and shared loopback listener are off.
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new
+        {
+            apiKey = "", deviceName = "Verification " + report.RunId, ingestPort = 0,
+            uploadIntervalMinutes = 1, windowTitleObservationEnabled = false,
+            windowActivityCollectionEnabled = false, interactionSignalEnabled = false, inputEventRecordingEnabled = false
+        }, RunReport.Json), token);
+        VerificationLane.RestrictFile(configPath);
+        var smoke = Path.Combine(lane.WorkPath, "desktop-identity.json");
+        var desktop = lane.Artifact("desktop");
+        await lane.CommandAsync("desktop-identity", desktop.Executable, desktop.Arguments.Concat(new[]
+        {
+            "--verify-startup=" + smoke, "--verify-startup-data-directory=" + lane.DesktopData
+        }), token, Path.GetDirectoryName(desktop.Path));
+        using var identity = JsonDocument.Parse(await File.ReadAllTextAsync(smoke, token));
+        if (!identity.RootElement.GetProperty("hostStarted").GetBoolean()
+            || !Guid.TryParse(identity.RootElement.GetProperty("hardwareId").GetString(), out var machineId)
+            || machineId == Guid.Empty)
+            throw new InvalidOperationException("Desktop did not report a valid real Machine identity.");
+        var config = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(configPath, token))!;
+        config["apiKey"] = _sourceConfig.ApiKey;
+        await File.WriteAllTextAsync(configPath, config.ToJsonString(RunReport.Json), token);
+        return machineId;
+    }
+
+    public Task StartAsync(CancellationToken token) => options.IsDesktop
+        ? lane.StartDesktopAsync(token) : lane.StartHeadlessAsync(_headlessConfig, token);
 
     public async Task AssertDeliveryAsync(CancellationToken token)
     {
@@ -155,7 +188,8 @@ internal sealed class HeadlessMainScenario(VerificationOptions options, Verifica
                 ReferenceExpectation.AssertMatches(actual);
                 await using var db = OpenDatabase();
                 var device = await db.Devices.AsNoTracking().SingleAsync(item => item.Id == actual[0].DeviceId, token);
-                if (device.OwnerId != _owner || device.HardwareId != $"subject:account:{_subjectId:D}")
+                if (device.OwnerId != _owner || !(options.IsDesktop ? Guid.TryParse(device.HardwareId, out var machineId) && machineId == _subjectId
+                    : device.HardwareId == $"subject:account:{_subjectId:D}"))
                     throw new InvalidOperationException("The delivered Segment belongs to an unexpected owner or Subject.");
                 report.Evidence["segmentId"] = actual[0].Id;
                 report.Evidence["deviceId"] = device.Id;

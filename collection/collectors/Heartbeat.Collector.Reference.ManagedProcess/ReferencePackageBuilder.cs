@@ -10,8 +10,9 @@ internal static class ReferencePackageBuilder
     public static void Create(string packageDirectory) =>
         Create(AppContext.BaseDirectory, packageDirectory);
 
-    internal static void Create(string sourceDirectory, string packageDirectory)
+    internal static void Create(string sourceDirectory, string packageDirectory, string subjectKind = "account")
     {
+        if (subjectKind is not ("account" or "machine")) throw new ArgumentException("Unsupported Reference Subject kind.");
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageDirectory);
         var sourceRoot = Path.GetFullPath(sourceDirectory);
@@ -32,6 +33,8 @@ internal static class ReferencePackageBuilder
         if (!File.Exists(executablePath))
             throw new InvalidOperationException(
                 "Run --create-package through the built apphost executable, not `dotnet <dll>`. ");
+
+        File.WriteAllText(Path.Combine(root, "reference-subject-kind.txt"), subjectKind);
 
         var schemaDirectory = Path.Combine(root, "schemas");
         Directory.CreateDirectory(schemaDirectory);
@@ -65,7 +68,7 @@ internal static class ReferencePackageBuilder
             },
             defaultInstance = new
             {
-                subjectKind = "account",
+                subjectKind,
                 configVersion = 1,
                 config = new { }
             },
@@ -84,7 +87,7 @@ internal static class ReferencePackageBuilder
                         document = "schemas/reference-segment.schema.json",
                         hash = Hash(File.ReadAllBytes(schemaPath))
                     },
-                    subjectKinds = new[] { "account" },
+                    subjectKinds = new[] { subjectKind },
                     dimensionKeys = Array.Empty<string>()
                 }
             },

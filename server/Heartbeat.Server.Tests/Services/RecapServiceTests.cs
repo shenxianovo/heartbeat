@@ -102,6 +102,31 @@ public class RecapServiceTests(PostgresContainerFixture fixture) : PostgresTestB
         }
     }
 
+    private sealed class GatedCancellationGenerator : IRecapGenerator
+    {
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllowCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool CleanupFinished { get; private set; }
+        public string Model => "fake-model";
+        public string PromptHash => "deadbeef";
+
+        public async IAsyncEnumerable<LlmChunk> GenerateStreamAsync(
+            string digest, [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            finally
+            {
+                CancellationObserved.TrySetResult();
+                await AllowCleanup.Task;
+                CleanupFinished = true;
+            }
+            yield break;
+        }
+    }
+
     private ActivitySegment SystemSegment(DateTimeOffset start, DateTimeOffset end) => new()
     {
         Id = Guid.CreateVersion7(),
@@ -1027,23 +1052,68 @@ public class RecapServiceTests(PostgresContainerFixture fixture) : PostgresTestB
         db.ActivitySegments.Add(SystemSegment(PastDay.AddHours(9), PastDay.AddHours(11)));
         await db.SaveChangesAsync();
 
-        var fake = new FakeGenerator { SilentForever = true };
-        var svc = new RecapService(db, fake, new DigestAssembler(db), null, Timeouts(20_000, 30_000, 10_000));
-
-        // 先跑一次纯读，把 EF 的模型编译与连接热起来——下面靠时间差判定，不想跟冷启动赛跑。
-        await svc.GetDailyRecapAsync("user-1", DayWindow(PastDay));
-
+        var fake = new GatedCancellationGenerator();
+        var svc = new RecapService(db, fake, new DigestAssembler(db), null,
+            new RecapStreamTimeouts(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan, TimeSpan.FromMilliseconds(1)));
         using var cts = new CancellationTokenSource();
-        var drain = DrainAsync(svc, PastDay, cts.Token);
-        await Task.Delay(200);
+        await using var stream = svc.GenerateDailyRecapStreamAsync("user-1", DayWindow(PastDay), cts.Token)
+            .GetAsyncEnumerator();
+        Assert.True(await stream.MoveNextAsync());
+        Assert.Equal(RecapStreamEvent.PingType, stream.Current.Type);
+
+        // 心跳证明 MoveNext 已在途；取消后的清理由 barrier 控制，不与线程调度或 EF 冷启动赛跑。
         await cts.CancelAsync();
-        var events = await drain;
+        await fake.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var next = stream.MoveNextAsync().AsTask();
+        try
+        {
+            Assert.False(next.IsCompleted, "Stream must await upstream cleanup before disposing its iterator.");
+        }
+        finally
+        {
+            fake.AllowCleanup.TrySetResult();
+        }
 
         // 客户端断开会连带取消 overall（它 link 在 ct 上），于是"谁被取消了"同时成立两条。判定
         // 顺序错了就会给一条已经没人听的流发 error，还把断开写成一句超时。
-        Assert.DoesNotContain(events, e => e.Type == RecapStreamEvent.ErrorType);
-        Assert.DoesNotContain(events, e => e.Type == RecapStreamEvent.DoneType);
+        Assert.False(await next.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.True(fake.CleanupFinished);
 
+        using var verify = CreateDbContext();
+        Assert.Empty(await verify.Recaps.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Generate_Timeout_WaitsForUpstreamCleanupBeforeDisposing(bool silenceTimeout)
+    {
+        using var db = CreateDbContext();
+        db.ActivitySegments.Add(SystemSegment(PastDay.AddHours(9), PastDay.AddHours(11)));
+        await db.SaveChangesAsync();
+        var fake = new GatedCancellationGenerator();
+        var deadline = TimeSpan.FromMilliseconds(1);
+        var svc = new RecapService(db, fake, new DigestAssembler(db), null, new RecapStreamTimeouts(
+            silenceTimeout ? deadline : Timeout.InfiniteTimeSpan,
+            silenceTimeout ? Timeout.InfiniteTimeSpan : deadline,
+            Timeout.InfiniteTimeSpan));
+        await using var stream = svc.GenerateDailyRecapStreamAsync("user-1", DayWindow(PastDay)).GetAsyncEnumerator();
+        Assert.True(await stream.MoveNextAsync());
+        Assert.Equal(RecapStreamEvent.ErrorType, stream.Current.Type);
+        Assert.Contains(silenceTimeout ? "没有任何响应" : "完整叙事", stream.Current.Message!);
+        await fake.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var dispose = stream.DisposeAsync().AsTask();
+        try
+        {
+            Assert.False(dispose.IsCompleted, "Timeout must retain ownership of the in-flight MoveNext.");
+        }
+        finally
+        {
+            fake.AllowCleanup.TrySetResult();
+        }
+        await dispose.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(fake.CleanupFinished);
         using var verify = CreateDbContext();
         Assert.Empty(await verify.Recaps.ToListAsync());
     }

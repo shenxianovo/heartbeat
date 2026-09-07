@@ -139,8 +139,6 @@ namespace Heartbeat.Server.Services
                         continue; // pending 原样留着，下一轮继续等它
                     }
 
-                    pending = null;
-
                     if (step.Failure != null)
                     {
                         yield return RecapStreamEvent.OfError(step.Failure);
@@ -148,6 +146,10 @@ namespace Heartbeat.Server.Services
                     }
 
                     if (step.ClientGone) yield break;
+
+                    // 取消可能先于上游 MoveNext 的清理结束；终态分支必须把 pending 留给 finally。
+                    // 只有实际取得一块或读到流末尾，才能释放这次读取的所有权。
+                    pending = null;
                     if (step.Completed) break;
 
                     // 收到任何一块（含只有思考的块）都证明上游活着：静默判死线整段重置。

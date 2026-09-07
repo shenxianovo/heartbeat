@@ -33,6 +33,7 @@ LLM 生成常常更久；后端 `HttpClient` 默认 100s 大于它，于是代�
 | 04 | [POST 流式生成端点](issues/04-sse-generate-endpoint.md) | 02 | ❌ |
 | 05 | [前端流式消费与渲染](issues/05-frontend-stream-consumption.md) | 03, 04 | ❌ |
 | 06 | [发问/整理流式化](issues/06-asking-proposal-streaming.md) | 02 | 待命，本 PRD 不承诺 |
+| 07 | [断连与异步迭代器释放竞态](issues/07-client-disconnect-async-enumerator-dispose-race.md) | 02, 04 | ✅ 修复与自动验收完成，可独立部署 Analytics |
 
 02–05 必须一起上线：03 拿掉 GET 的生成能力，前端就必须已经会走 POST。
 
@@ -44,3 +45,9 @@ LLM 生成常常更久；后端 `HttpClient` 默认 100s 大于它，于是代�
 - 同一天并发生成第二个请求拿到 409。
 - 生成中途关闭页面：不写缓存，上次成功的叙事保留。
 - 生成完成瞬间断开：叙事已落库，重新打开即命中缓存。
+
+## 2026-09-07 — Reliability closeout
+
+issue 07 已完成：断连和两种超时保留在途读取的所有权，等待生成器清理后再释放；确定性 regression
+在旧实现 3/3 失败，修复后 Recap 39 条和连续两轮 solution（每轮 Analytics 457 条）全部通过。
+这完成了该竞态的自动验收，不代表已部署 Analytics，也不替代原有线上流式体验验收。

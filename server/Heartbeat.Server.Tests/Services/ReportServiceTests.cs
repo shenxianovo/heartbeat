@@ -36,6 +36,27 @@ public class ReportServiceTests(PostgresContainerFixture fixture) : PostgresTest
     };
 
     [Fact]
+    public async Task Reports_OverlappingOptionalCollector_DoesNotInflateSystemDuration()
+    {
+        using var db = CreateDbContext();
+        var day = new DateTimeOffset(2026, 9, 7, 0, 0, 0, TimeSpan.Zero);
+        var system = SystemSegment(day.AddHours(9), day.AddHours(10));
+        var collector = SystemSegment(day.AddHours(9), day.AddHours(10));
+        collector.Source = "reference.optional";
+        collector.IdentityKey = "reference:activity";
+        db.ActivitySegments.AddRange(system, collector);
+        await db.SaveChangesAsync();
+
+        var service = new ReportService(db);
+        var daily = await service.GetDailyReportAsync("user-1", null, DayWindow(day, day.AddDays(1)));
+        var weekly = await service.GetWeeklyReportAsync(
+            "user-1", null, WeekWindow("2026-09-07", "UTC", day, day.AddDays(7)));
+
+        Assert.Equal(3600, Assert.Single(daily.Report!.Apps).DurationSeconds);
+        Assert.Equal(3600, Assert.Single(weekly.Report!.Apps).DurationSeconds);
+    }
+
+    [Fact]
     public async Task DailyReport_MidnightCrossingSegment_ClippedPerDay_NoDoubleCount()
     {
         using var db = CreateDbContext();

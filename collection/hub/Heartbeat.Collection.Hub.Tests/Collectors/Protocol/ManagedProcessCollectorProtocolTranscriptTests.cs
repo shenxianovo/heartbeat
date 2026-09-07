@@ -636,6 +636,25 @@ public class ManagedProcessCollectorProtocolTranscriptTests
         Assert.True(activation.RuntimeState.ProcessTerminated);
     }
 
+    [Fact]
+    public async Task WrongReadySpecRevision_IsRejectedBeforeActivationBecomesReady()
+    {
+        using var fixture = ManagedRuntimeFixture.Create();
+
+        var error = await Assert.ThrowsAsync<CollectorActivationException>(async () =>
+        {
+            await using var activation = await fixture.Runtime.ActivateManagedProcessAsync(
+                fixture.Instance.CollectorInstanceId,
+                fixture.Package,
+                Options("wrong_ready_spec_revision"));
+        });
+
+        Assert.Equal("protocol_invalid_message", error.Error.Code);
+        Assert.Contains("activation.ready appliedSpecRevision", error.GetBaseException().Message);
+        Assert.Equal(CollectorRuntimePhase.Failed,
+            fixture.Runtime.GetManagedProcessRuntimeState(fixture.Instance.CollectorInstanceId).Phase);
+    }
+
     [Theory]
     [InlineData("invalid_capability_type")]
     [InlineData("unknown_hello_field")]

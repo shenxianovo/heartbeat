@@ -11,7 +11,7 @@ if (args is ["--create-package", var packageDirectory])
 var behavior = Environment.GetEnvironmentVariable("HEARTBEAT_REFERENCE_BEHAVIOR");
 if (RawReferenceProtocolProbe.Handles(behavior))
 {
-    await RawReferenceProtocolProbe.RunAsync(behavior!, Console.Out);
+    await RawReferenceProtocolProbe.RunAsync(behavior!, Console.In, Console.Out);
     return;
 }
 
@@ -150,12 +150,13 @@ internal static class RawReferenceProtocolProbe
         "exit_before_hello",
         "invalid_capability_type",
         "uppercase_uuid",
-        "unknown_hello_field"
+        "unknown_hello_field",
+        "wrong_ready_spec_revision"
     ];
 
     public static bool Handles(string? behavior) => behavior is not null && Behaviors.Contains(behavior);
 
-    public static async Task RunAsync(string behavior, TextWriter output)
+    public static async Task RunAsync(string behavior, TextReader input, TextWriter output)
     {
         if (behavior == "startup_timeout")
         {
@@ -205,5 +206,64 @@ internal static class RawReferenceProtocolProbe
             hello["body"]!.AsObject()["unexpected"] = true;
         await output.WriteLineAsync(hello.ToJsonString());
         await output.FlushAsync();
+
+        if (behavior == "wrong_ready_spec_revision")
+            await SendWrongReadyRevisionAsync(input, output);
+    }
+
+    private static async Task SendWrongReadyRevisionAsync(TextReader input, TextWriter output)
+    {
+        using var accepted = await ReadMessageAsync("activation.accepted");
+        var activationId = accepted.RootElement.GetProperty("body").GetProperty("activationId").GetGuid();
+        using var initialize = await ReadMessageAsync("activation.initialize");
+        var specRevision = initialize.RootElement.GetProperty("body").GetProperty("spec")
+            .GetProperty("revision").GetInt64();
+        await SendAsync(new
+        {
+            protocol = "heartbeat.collector/1",
+            type = "activation.initialized",
+            messageId = Guid.CreateVersion7(),
+            activationId,
+            replyTo = initialize.RootElement.GetProperty("messageId").GetGuid(),
+            body = new { appliedSpecRevision = specRevision }
+        });
+        await SendAsync(new
+        {
+            protocol = "heartbeat.collector/1",
+            type = "streams.open",
+            messageId = Guid.CreateVersion7(),
+            activationId,
+            body = new
+            {
+                specRevision,
+                bindings = new[] { new { bindingId = "activity", outputId = "activity", dimensions = new { } } }
+            }
+        });
+        using var opened = await ReadMessageAsync("streams.opened");
+        // The shared client rejects an incorrect revision itself, so this hostile fixture writes raw wire messages.
+        await SendAsync(new
+        {
+            protocol = "heartbeat.collector/1",
+            type = "activation.ready",
+            messageId = Guid.CreateVersion7(),
+            activationId,
+            body = new { appliedSpecRevision = specRevision + 1 }
+        });
+        await Task.Delay(Timeout.InfiniteTimeSpan);
+
+        async Task<JsonDocument> ReadMessageAsync(string expectedType)
+        {
+            var document = JsonDocument.Parse(await input.ReadLineAsync() ?? throw new EndOfStreamException());
+            if (document.RootElement.GetProperty("type").GetString() == expectedType)
+                return document;
+            document.Dispose();
+            throw new InvalidDataException($"Expected {expectedType} in the reference handshake.");
+        }
+
+        async Task SendAsync(object message)
+        {
+            await output.WriteLineAsync(JsonSerializer.Serialize(message));
+            await output.FlushAsync();
+        }
     }
 }

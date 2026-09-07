@@ -436,6 +436,62 @@ public sealed class CollectorProtocolClientTests
         }
     }
 
+    [Theory]
+    [InlineData(1, "older", 2, "newer")]
+    [InlineData(2, "newer", 1, "older")]
+    public void OutboxSameFactSnapshotsKeepHighestRevisionAcrossRestart(
+        long firstRevision,
+        string firstContent,
+        long secondRevision,
+        string secondContent)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"heartbeat-protocol-revision-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var factId = Guid.CreateVersion7();
+        var start = new DateTimeOffset(2026, 9, 7, 10, 0, 0, TimeSpan.Zero);
+        try
+        {
+            var outbox = CollectorProtocolOutbox.Open(root, 16, Definition().Outputs, start);
+            foreach (var (revision, content) in new[]
+                     {
+                         (firstRevision, firstContent),
+                         (secondRevision, secondContent)
+                     })
+            {
+                outbox.Enqueue(new CollectorFact(
+                    "activity",
+                    1,
+                    factId,
+                    revision,
+                    null,
+                    CollectorFactRecordState.Present,
+                    new CollectorSegmentFactTime(start, start.AddMinutes(revision), IsFinal: false),
+                    JsonSerializer.SerializeToElement(new { content })));
+            }
+
+            AssertHighestRevision(Assert.Single(outbox.Facts).Fact);
+
+            var restarted = CollectorProtocolOutbox.Open(
+                root,
+                16,
+                Definition().Outputs,
+                start.AddHours(1));
+            AssertHighestRevision(Assert.Single(restarted.Facts).Fact);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        void AssertHighestRevision(CollectorFact fact)
+        {
+            Assert.Equal(factId, fact.FactId);
+            Assert.Equal(2, fact.Revision);
+            Assert.Equal(start.AddMinutes(2), Assert.IsType<CollectorSegmentFactTime>(fact.Time).End);
+            Assert.Equal("newer", fact.Payload.GetProperty("content").GetString());
+        }
+    }
+
     [Fact]
     public void CapacityEvictionOfPointSegmentPersistsUploadableHalfOpenGap()
     {

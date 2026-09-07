@@ -59,6 +59,7 @@ public sealed class MainViewModelTests
                 CollectorMarketplacePhase.Waiting)
         ];
         await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+        Assert.Equal("等待连接", item.StatusText);
         item.RequestUninstallCommand.Execute(null);
         Assert.True(item.IsUninstallConfirmationVisible);
 

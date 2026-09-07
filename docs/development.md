@@ -76,6 +76,18 @@ node scripts/collector-contracts.mjs check
 DTO 或端点变更按 [API 导读](api.md#客户端重新生成) 重新生成客户端。采集、摄入、投影或
 持久化变更必须执行 [Local Data Smoke](runbooks/local-data-smoke.md)；容器存活不证明数据正确。
 
+跨服务主链路使用独立临时泳道自动验收：
+
+```bash
+dotnet run --project tools/Heartbeat.Verification -- run headless-main
+```
+
+命令读取 `.local/heartbeat-headless.json` 的 API key 与管理身份配置，Auth 使用线上服务；自动构建
+并启动 Reference Collector、Headless、Analytics 与独立 PostgreSQL，核对指定 Segment 到达后清理。
+每次使用新的数据目录和数据库，报告与日志保留在 `.local/verification/<run-id>/`。它不要求先运行
+`start-local`，也不使用或清空现有开发栈数据。参数、断链演练和扩展方式见
+[验证命令说明](../tools/Heartbeat.Verification/README.md)。
+
 ## 4. 停止
 
 ```powershell

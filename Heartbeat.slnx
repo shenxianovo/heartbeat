@@ -36,4 +36,8 @@
     <Project Path="shared/Heartbeat.Core/Heartbeat.Core.csproj" />
     <Project Path="shared/Heartbeat.Core.Tests/Heartbeat.Core.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Heartbeat.Verification.Tests/Heartbeat.Verification.Tests.csproj" />
+    <Project Path="tools/Heartbeat.Verification/Heartbeat.Verification.csproj" />
+  </Folder>
 </Solution>

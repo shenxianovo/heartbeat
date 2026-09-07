@@ -14,7 +14,6 @@ import {
 } from './fold'
 import { domainOf, identityKeyOf, siteOf } from './normalize'
 import { uuidv7 } from './ids'
-import { detectBrowserAppHint } from './app-hint'
 import { createChromeBrowserDelivery } from './delivery-chrome'
 import type { BrowserCollectionPolicy } from './delivery'
 
@@ -26,24 +25,9 @@ const deps: FoldDeps = {
   identityKeyOf,
   domainOf,
   siteOf,
-  appHint: detectAppHint(),
 }
 
-const delivery = createChromeBrowserDelivery(deps.appHint)
-
-/** 只报告逻辑产品；hub 的平台 adapter 再解析为 win:/mac: AppIdentity。 */
-function detectAppHint(): string | undefined {
-  const nav = navigator as unknown as {
-    userAgent: string
-    userAgentData?: { brands?: { brand: string }[] }
-    brave?: { isBrave?: () => Promise<boolean> }
-  }
-  return detectBrowserAppHint({
-    brands: nav.userAgentData?.brands?.map((b) => b.brand),
-    userAgent: nav.userAgent,
-    hasBraveApi: typeof nav.brave?.isBrave === 'function',
-  })
-}
+const delivery = createChromeBrowserDelivery()
 
 // ---- 串行化：storage 读改写不可交错（事件处理与 flush 共享折叠状态）。----
 

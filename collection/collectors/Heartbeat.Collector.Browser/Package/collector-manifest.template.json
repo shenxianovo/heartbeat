@@ -2,12 +2,23 @@
   "manifestVersion": 1,
   "packageId": "heartbeat.collector.browser",
   "version": "0.1.0",
-  "protocolMajors": [1],
+  "protocolMajors": [
+    1
+  ],
   "supportedCapabilities": {
-    "facts.segment": [1],
-    "diagnostics.stream-gap": [1]
+    "facts.segment": [
+      1
+    ],
+    "diagnostics.stream-gap": [
+      1
+    ]
   },
-  "config": { "version": 1, "accepts": [1] },
+  "config": {
+    "version": 1,
+    "accepts": [
+      1
+    ]
+  },
   "observationDeclaration": {
     "document": "observation-depth.declaration.json"
   },
@@ -22,8 +33,13 @@
         "revision": 1,
         "document": "schemas/browser-active-tab-segment.schema.json"
       },
-      "subjectKinds": ["machine"],
-      "dimensionKeys": ["appHint", "externalHostIdentity"]
+      "subjectKinds": [
+        "machine"
+      ],
+      "dimensionKeys": [
+        "appIdentityKey",
+        "externalHostIdentity"
+      ]
     }
   ],
   "artifacts": [
@@ -31,10 +47,28 @@
       "artifactId": "browser.extension",
       "selector": {
         "driver": "externalHost",
-        "os": ["windows", "macos"],
-        "arch": ["x64", "arm64"]
+        "os": [
+          "windows",
+          "macos"
+        ],
+        "arch": [
+          "x64",
+          "arm64"
+        ]
       },
       "entrypoint": "artifacts/browser-extension.artifact.json"
     }
-  ]
+  ],
+  "presentation": {
+    "displayName": "Browser",
+    "summary": "记录 Chrome 与 Edge 各窗口的活动标签页。"
+  },
+  "defaultInstance": {
+    "subjectKind": "machine",
+    "configVersion": 1,
+    "config": {
+      "enabled": true,
+      "flushPeriodMs": 30000
+    }
+  }
 }

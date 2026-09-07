@@ -27,8 +27,6 @@ export interface SegmentSnapshot {
   id: string
   source: 'browser'
   identityKey: string
-  /** 平台无关产品提示；缺失表示采集器无法可靠识别宿主浏览器。 */
-  appHint?: string
   title: string
   startTime: string // ISO 8601
   endTime: string
@@ -47,7 +45,6 @@ export interface FoldDeps {
   domainOf: (url: string) => string
   /** 可注册域（深度表 v2 的 site 读数,ADR-030 §5）;空串 = 读数缺席。 */
   siteOf: (url: string) => string
-  appHint?: string
 }
 
 export interface FoldResult {
@@ -122,7 +119,6 @@ function snapshotOf(a: OpenActivity, endMs: number, deps: FoldDeps, isFinal: boo
     id: a.id,
     source: 'browser',
     identityKey: a.identityKey,
-    ...(deps.appHint === undefined ? {} : { appHint: deps.appHint }),
     title: a.title,
     startTime: new Date(a.startTime).toISOString(),
     endTime: new Date(Math.max(endMs, a.startTime)).toISOString(),

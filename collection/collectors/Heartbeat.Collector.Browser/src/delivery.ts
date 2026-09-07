@@ -57,7 +57,7 @@ export interface BrowserDeliveryStore {
 
 export interface BrowserProtocolDeliveryRequest {
   port: number
-  appHint: string | undefined
+  appIdentityKey: string | undefined
   externalHostIdentity: string
   snapshots: SegmentSnapshot[]
   previousSession?: BrowserProtocolSession
@@ -79,7 +79,7 @@ export interface BrowserHubAdapter {
 export interface BrowserDeliveryDependencies {
   store: BrowserDeliveryStore
   hub: BrowserHubAdapter
-  appHint: string | undefined
+  loadAppIdentityKey(): Promise<string | undefined>
   loadBasePort(): Promise<number>
   loadExternalHostIdentity(): Promise<string>
   now?(): number
@@ -124,6 +124,8 @@ export function createBrowserDelivery(dependencies: BrowserDeliveryDependencies)
   async function deliveryCycleImplementation(): Promise<BrowserCollectionPolicy> {
     let session = await dependencies.store.loadSession()
     let currentPolicy = (await dependencies.store.loadDurable()).policy
+    const appIdentityKey = await dependencies.loadAppIdentityKey()
+    if (appIdentityKey === undefined) return currentPolicy
     const attemptAt = now()
     if (attemptAt < session.backoff.nextAttemptAt) return currentPolicy
 
@@ -146,7 +148,7 @@ export function createBrowserDelivery(dependencies: BrowserDeliveryDependencies)
 
     const protocolResult = await dependencies.hub.deliverProtocol({
       port: compatiblePort,
-      appHint: dependencies.appHint,
+      appIdentityKey,
       externalHostIdentity: await dependencies.loadExternalHostIdentity(),
       snapshots,
       previousSession: session.protocolSession,

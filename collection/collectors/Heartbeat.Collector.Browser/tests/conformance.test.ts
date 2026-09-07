@@ -33,7 +33,6 @@ const snapshot: SegmentSnapshot = {
   id: '0198d5eb-fc31-7d7b-8bf0-c2d009ec8999',
   source: 'browser',
   identityKey: 'https://example.com/docs',
-  appHint: 'edge',
   title: 'Docs',
   startTime: '2026-08-25T08:00:00.000Z',
   endTime: '2026-08-25T08:01:00.000Z',

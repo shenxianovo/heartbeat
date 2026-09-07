@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config'
-import { copyFileSync } from 'node:fs'
+import { copyFileSync, cpSync, rmSync } from 'node:fs'
 
 export default defineConfig({
   build: {
@@ -17,6 +17,8 @@ export default defineConfig({
       name: 'copy-manifest',
       closeBundle() {
         copyFileSync('manifest.json', 'dist/manifest.json')
+        rmSync('Package/browser-extension', { recursive: true, force: true })
+        cpSync('dist', 'Package/browser-extension', { recursive: true })
       },
     },
   ],

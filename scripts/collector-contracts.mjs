@@ -200,11 +200,7 @@ function stageBrowserArtifact(destination) {
   const descriptorPath = join(destination, 'artifacts/browser-extension.artifact.json')
   mkdirSync(dirname(descriptorPath), { recursive: true })
   writeFileSync(descriptorPath, descriptor)
-  const artifactHash = sha256(descriptor)
-  writeFileSync(
-    join(extension, 'collector-artifact-ref.json'),
-    `${JSON.stringify({ artifactHash }, null, 2)}\n`,
-  )
+
 }
 
 function populateContentReferences(destination, manifest) {
@@ -254,7 +250,7 @@ function includeCurrentTestPlatform(manifest) {
   }
 }
 
-function stagePackage(name, destination, includeTestPlatform = false) {
+function stagePackage(name, destination, includeTestPlatform = false, version) {
   const source = packageSources[name]
   if (!source) throw new Error(`unknown package '${name}'`)
   const output = resolve(destination)
@@ -263,7 +259,14 @@ function stagePackage(name, destination, includeTestPlatform = false) {
   copyPackageSource(source, output)
   const manifest = readJson(join(source, 'collector-manifest.template.json'))
   if (includeTestPlatform) includeCurrentTestPlatform(manifest)
-  if (name === 'browser') stageBrowserArtifact(output)
+  if (version !== undefined) manifest.version = version
+  if (name === 'browser') {
+    const extensionManifestPath = join(output, 'browser-extension/manifest.json')
+    const extensionManifest = readJson(extensionManifestPath)
+    extensionManifest.version = manifest.version
+    writeFileSync(extensionManifestPath, `${JSON.stringify(extensionManifest, null, 2)}\n`)
+    stageBrowserArtifact(output)
+  }
   populateContentReferences(output, manifest)
   const contracts = factContracts()
   const byId = new Map(contracts.map(contract => [contract.document.schemaId, contract]))
@@ -281,7 +284,19 @@ function stagePackage(name, destination, includeTestPlatform = false) {
     writeFileSync(target, contract.bytes)
     schema.hash = contract.contentHash
   }
-  writeFileSync(join(output, 'collector-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
+  writeFileSync(join(output, 'collector-manifest.json'), manifestBytes)
+  if (name === 'browser') {
+    // Bootstrap reference is derived from the final manifest, outside its descriptor's payload
+    // hash to avoid a circular identity. It grants no authority: the Host compares every field.
+    writeFileSync(join(output, 'browser-extension/collector-artifact-ref.json'), `${JSON.stringify({
+      packageId: manifest.packageId,
+      packageVersion: manifest.version,
+      packageContentHash: sha256(manifestBytes),
+      artifactId: manifest.artifacts[0].artifactId,
+      artifactHash: manifest.artifacts[0].contentHash,
+    }, null, 2)}\n`)
+  }
   process.stdout.write(`Staged ${name} Collector Package at ${output}\n`)
 }
 
@@ -299,11 +314,21 @@ try {
     const baseIndex = args.indexOf('--base-ref')
     if (baseIndex >= 0) checkBaseRef(baseline, args[baseIndex + 1])
     process.stdout.write('Collector Fact Schemas and evolution baseline are consistent.\n')
-  } else if (command === 'stage' && (args.length === 2 ||
-      args.length === 3 && args[2] === '--include-current-test-platform')) {
-    stagePackage(args[0], args[1], args.length === 3)
+  } else if (command === 'stage' && args.length >= 2) {
+    let includeTestPlatform = false
+    let version
+    for (let index = 2; index < args.length; index++) {
+      if (args[index] === '--include-current-test-platform') includeTestPlatform = true
+      else if (args[index] === '--version' && args[0] === 'browser' && version === undefined) {
+        version = args[++index]
+        if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version ?? '') ||
+            version.split('.').some(part => Number(part) > 65535) || version === '0.0.0')
+          throw new Error('Browser version must be stable X.Y.Z, each part <= 65535, and nonzero')
+      } else throw new Error(`unsupported stage option ${args[index]}`)
+    }
+    stagePackage(args[0], args[1], includeTestPlatform, version)
   } else {
-    throw new Error('usage: collector-contracts.mjs baseline | check [--base-ref REF] | stage <browser|system|reference-fixture> <output> [--include-current-test-platform]')
+    throw new Error('usage: collector-contracts.mjs baseline | check [--base-ref REF] | stage <browser|system|reference-fixture> <output> [--include-current-test-platform] [--version X.Y.Z (browser only)]')
   }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)

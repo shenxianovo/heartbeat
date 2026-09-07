@@ -27,7 +27,6 @@ function snapshot(index = 1, end = '2026-08-25T08:01:00.000Z'): SegmentSnapshot 
     id: `0198d5eb-fc31-7d7b-8bf0-${index.toString(16).padStart(12, '0')}`,
     source: 'browser',
     identityKey: `https://example.com/${index}`,
-    appHint: 'edge',
     title: `Page ${index}`,
     startTime: '2026-08-25T08:00:00.000Z',
     endTime: end,
@@ -109,7 +108,7 @@ function delivery(
   return createBrowserDelivery({
     store,
     hub,
-    appHint: 'edge',
+    loadAppIdentityKey: async () => 'win:msedge',
     loadBasePort: async () => PORT,
     loadExternalHostIdentity: async () => 'host-a',
     now: () => clock.now,
@@ -138,6 +137,21 @@ async function acknowledged(
 }
 
 describe('BrowserDelivery interface', () => {
+  it('keeps pending Facts without opening an Activation when App identity is unknown', async () => {
+    const store = new MemoryStore()
+    const hub = new MemoryHub()
+    const module = createBrowserDelivery({
+      store, hub,
+      loadAppIdentityKey: async () => undefined,
+      loadBasePort: async () => PORT,
+      loadExternalHostIdentity: async () => 'host-a',
+    })
+    await module.enqueue([snapshot()])
+    await module.deliveryCycle()
+    expect(hub.protocolCalls).toHaveLength(0)
+    expect(Object.values((await store.loadDurable()).queue)).toHaveLength(1)
+  })
+
   it('owns enqueue, delivery, ACK convergence, and still maintains an empty Activation', async () => {
     const store = new MemoryStore()
     const hub = new MemoryHub()

@@ -53,7 +53,6 @@ function snapshotOf(a, endMs, deps2, isFinal) {
     id: a.id,
     source: "browser",
     identityKey: a.identityKey,
-    ...deps2.appHint === void 0 ? {} : { appHint: deps2.appHint },
     title: a.title,
     startTime: new Date(a.startTime).toISOString(),
     endTime: new Date(Math.max(endMs, a.startTime)).toISOString(),
@@ -148,52 +147,33 @@ function uuidv7(nowMs = Date.now()) {
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
-const EXACT_BRANDS = /* @__PURE__ */ new Map([
-  ["google chrome", "chrome"],
-  ["microsoft edge", "edge"],
-  ["brave", "brave"],
-  ["opera", "opera"],
-  ["opera gx", "opera"],
-  ["vivaldi", "vivaldi"],
-  ["firefox", "firefox"]
-]);
-function detectBrowserAppHint(signals) {
+function detectBrowserAppIdentity(signals) {
+  if (signals.hasBraveApi) return void 0;
   const candidates = /* @__PURE__ */ new Set();
-  let hasUnknownBrand = false;
-  for (const rawBrand of signals.brands ?? []) {
-    const brand = rawBrand.trim().toLowerCase();
-    const exact = EXACT_BRANDS.get(brand);
-    if (exact) {
-      candidates.add(exact);
-    } else if (!isGenericClientHintBrand(brand)) {
-      hasUnknownBrand = true;
-    }
+  for (const value of signals.brands ?? []) {
+    const brand = value.trim().toLowerCase();
+    if (brand === "google chrome") candidates.add("chrome");
+    else if (brand === "microsoft edge") candidates.add("edge");
+    else if (brand !== "chromium" && brand.replace(/[^a-z0-9]/g, "") !== "notabrand") return void 0;
   }
-  if (signals.hasBraveApi) candidates.add("brave");
   const ua = signals.userAgent ?? "";
-  if (/\bEdg(?:A|iOS)?\//i.test(ua)) candidates.add("edge");
-  if (/\bOPR\//i.test(ua)) candidates.add("opera");
-  if (/\bVivaldi\//i.test(ua)) candidates.add("vivaldi");
-  if (/\bFirefox\//i.test(ua)) candidates.add("firefox");
-  if (hasUnknownBrand || candidates.size !== 1) return void 0;
-  return candidates.values().next().value;
+  if (/\b(?:OPR|Vivaldi|Firefox|EdgA|EdgiOS)\//i.test(ua)) return void 0;
+  if (/\bEdg\//.test(ua)) candidates.add("edge");
+  if (candidates.size !== 1) return void 0;
+  const browser = [...candidates][0];
+  if (signals.platform === "win") return browser === "chrome" ? "win:chrome" : "win:msedge";
+  if (signals.platform === "mac") return browser === "chrome" ? "mac:com.google.chrome" : "mac:com.microsoft.edgemac";
+  return void 0;
 }
-function isGenericClientHintBrand(brand) {
-  if (brand === "" || brand === "chromium") return true;
-  return brand.replace(/[^a-z0-9]/g, "") === "notabrand";
-}
-const ROUTE = "/v1/collector-protocol/browser";
-const ARTIFACT_ID = "browser.extension";
-const TEST_ARTIFACT_HASH = `sha256:${"0".repeat(64)}`;
-async function browserArtifactHash() {
-  if (typeof chrome === "undefined" || !chrome.runtime?.getURL) return TEST_ARTIFACT_HASH;
+const ROUTE = "/v1/collector-protocol/external-host";
+async function browserPackageReference() {
   const response = await fetch(chrome.runtime.getURL("collector-artifact-ref.json"));
-  if (!response.ok) throw new Error("browser Package metadata is unavailable");
+  if (!response.ok) throw new Error("Browser Package metadata is unavailable");
   const metadata = await response.json();
-  if (typeof metadata.artifactHash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(metadata.artifactHash)) {
-    throw new Error("browser Package metadata has an invalid artifact hash");
+  if (metadata?.packageId !== "heartbeat.collector.browser" || metadata.artifactId !== "browser.extension" || typeof metadata.packageVersion !== "string" || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(metadata.packageVersion) || ![metadata.packageContentHash, metadata.artifactHash].every((value) => typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value))) {
+    throw new Error("Browser Package metadata is invalid");
   }
-  return metadata.artifactHash;
+  return metadata;
 }
 const DEFAULT_LIMITS = {
   maxFactsPerBatch: 500,
@@ -233,7 +213,7 @@ function acknowledgedSnapshotIds(snapshots, acknowledgement) {
     (result) => Number.isInteger(result.index) && result.index >= 0 && result.index < snapshots.length && acknowledgedStatuses.has(result.status)
   ).map((result) => snapshots[result.index].id);
 }
-async function openBrowserProtocolSession(port, appHint, externalHostIdentity, attempt, applySpec) {
+async function openBrowserProtocolSession(port, appIdentityKey, externalHostIdentity, attempt, applySpec) {
   try {
     const hello = await fetch(`http://127.0.0.1:${port}${ROUTE}/hello`, {
       method: "POST",
@@ -244,14 +224,13 @@ async function openBrowserProtocolSession(port, appHint, externalHostIdentity, a
         attempt.helloMessageId,
         void 0,
         {
-          artifactId: ARTIFACT_ID,
-          artifactHash: await browserArtifactHash(),
+          ...await browserPackageReference(),
           protocolMajors: [1],
           supportedCapabilities: {
             "facts.segment": [1],
             "diagnostics.stream-gap": [1]
           },
-          appHint,
+          appIdentityKey,
           externalHostIdentity
         }
       ))
@@ -471,8 +450,8 @@ async function publishBrowserFacts(session, snapshots, previousAttempt, persistA
     return { kind: "unavailable", publishAttempt: attempt, session };
   }
 }
-async function uploadWithBrowserProtocol(port, appHint, externalHostIdentity, snapshots, previousSession, previousActivationAttempt, previousPublishAttempt, persistActivationAttempt, persistPublishAttempt, applySpec, pendingGap, persistGapAttempt) {
-  if (!appHint || !externalHostIdentity) return { kind: "unavailable" };
+async function uploadWithBrowserProtocol(port, appIdentityKey, externalHostIdentity, snapshots, previousSession, previousActivationAttempt, previousPublishAttempt, persistActivationAttempt, persistPublishAttempt, applySpec, pendingGap, persistGapAttempt) {
+  if (!appIdentityKey || !externalHostIdentity) return { kind: "unavailable" };
   if (snapshots.some((snapshot) => !isUuidV7(snapshot.id))) return { kind: "unavailable" };
   const renewed = previousSession?.port === port ? await renewBrowserProtocolSession(previousSession) : null;
   const activationAttempt = previousActivationAttempt ?? {
@@ -484,7 +463,7 @@ async function uploadWithBrowserProtocol(port, appHint, externalHostIdentity, sn
   if (renewed === null) await persistActivationAttempt?.(activationAttempt);
   const session = renewed ?? await openBrowserProtocolSession(
     port,
-    appHint,
+    appIdentityKey,
     externalHostIdentity,
     activationAttempt,
     applySpec
@@ -613,12 +592,12 @@ const PORT_RANGE = 10;
 const PROBE_TIMEOUT_MS = 1500;
 async function probeHub(port) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/v1/collector-protocol/browser`, {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/collector-protocol/external-host`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
     });
     if (!res.ok) return false;
     const body = await res.json();
-    return body.binding === "browser" && Array.isArray(body.protocolMajors) && body.protocolMajors.includes(1);
+    return body.binding === "external-host" && Array.isArray(body.protocolMajors) && body.protocolMajors.includes(1);
   } catch {
     return false;
   }
@@ -642,7 +621,7 @@ class LoopbackBrowserHubAdapter {
   deliverProtocol(request) {
     return uploadWithBrowserProtocol(
       request.port,
-      request.appHint,
+      request.appIdentityKey,
       request.externalHostIdentity,
       request.snapshots,
       request.previousSession,
@@ -695,6 +674,8 @@ function createBrowserDelivery(dependencies) {
   async function deliveryCycleImplementation() {
     let session = await dependencies.store.loadSession();
     let currentPolicy = (await dependencies.store.loadDurable()).policy;
+    const appIdentityKey = await dependencies.loadAppIdentityKey();
+    if (appIdentityKey === void 0) return currentPolicy;
     const attemptAt = now();
     if (attemptAt < session.backoff.nextAttemptAt) return currentPolicy;
     const basePort = await dependencies.loadBasePort();
@@ -714,7 +695,7 @@ function createBrowserDelivery(dependencies) {
     let reportedGap = durable.pendingGaps[0];
     const protocolResult = await dependencies.hub.deliverProtocol({
       port: compatiblePort,
-      appHint: dependencies.appHint,
+      appIdentityKey,
       externalHostIdentity: await dependencies.loadExternalHostIdentity(),
       snapshots,
       previousSession: session.protocolSession,
@@ -908,9 +889,7 @@ const DESIRED_ENABLED_KEY = "browserCollectorDesiredEnabled";
 const DELIVERY_POLICY_KEY = "browserCollectorDeliveryPolicy";
 const EXTERNAL_HOST_IDENTITY_KEY = "browserCollectorExternalHostIdentity";
 class ChromeBrowserDeliveryStore {
-  constructor(currentAppHint) {
-    this.currentAppHint = currentAppHint;
-  }
+  sessionStarted = false;
   async loadDurable() {
     const [local, transient] = await Promise.all([
       chrome.storage.local.get([
@@ -934,7 +913,7 @@ class ChromeBrowserDeliveryStore {
       await chrome.storage.local.set({ [PENDING_GAP_KEY]: pendingGaps.value });
     }
     return {
-      queue: normalizeQueuedSnapshots(rawQueue, this.currentAppHint),
+      queue: normalizeQueuedSnapshots(rawQueue),
       pendingGaps: pendingGaps.value,
       deadLetters: Array.isArray(local[DEAD_LETTER_KEY]) ? local[DEAD_LETTER_KEY] : defaults.deadLetters,
       policy
@@ -949,6 +928,14 @@ class ChromeBrowserDeliveryStore {
     });
   }
   async loadSession() {
+    if (!this.sessionStarted) {
+      await chrome.storage.session.remove([
+        PROTOCOL_SESSION_KEY,
+        PROTOCOL_ACTIVATION_ATTEMPT_KEY,
+        PROTOCOL_PUBLISH_ATTEMPT_KEY
+      ]);
+      this.sessionStarted = true;
+    }
     const got = await chrome.storage.session.get([
       BACKOFF_KEY,
       HUB_PORT_KEY,
@@ -980,6 +967,7 @@ class ChromeBrowserDeliveryStore {
       ...state.publishAttempt === void 0 ? [PROTOCOL_PUBLISH_ATTEMPT_KEY] : []
     ];
     if (remove.length > 0) await chrome.storage.session.remove(remove);
+    this.sessionStarted = true;
   }
 }
 function normalizePendingGaps(raw) {
@@ -994,11 +982,20 @@ function normalizePendingGaps(raw) {
   });
   return { value, migrated };
 }
-function createChromeBrowserDelivery(appHint) {
+function createChromeBrowserDelivery() {
   return createBrowserDelivery({
-    store: new ChromeBrowserDeliveryStore(appHint),
+    store: new ChromeBrowserDeliveryStore(),
     hub: new LoopbackBrowserHubAdapter(),
-    appHint,
+    loadAppIdentityKey: async () => {
+      const nav = navigator;
+      const platform = await chrome.runtime.getPlatformInfo();
+      return detectBrowserAppIdentity({
+        platform: platform.os,
+        brands: nav.userAgentData?.brands?.map((item) => item.brand),
+        userAgent: nav.userAgent,
+        hasBraveApi: nav.brave !== void 0
+      });
+    },
     loadBasePort: async () => (await loadConfig()).port,
     loadExternalHostIdentity
   });
@@ -1011,16 +1008,18 @@ async function loadExternalHostIdentity() {
   await chrome.storage.local.set({ [EXTERNAL_HOST_IDENTITY_KEY]: created });
   return created;
 }
-function normalizeQueuedSnapshots(stored, currentAppHint) {
+function normalizeQueuedSnapshots(stored) {
   return Object.fromEntries(
-    Object.entries(stored).map(([id, { appName: _legacyAppName, ...snapshot }]) => [
-      id,
-      {
-        ...snapshot,
-        isFinal: snapshot.isFinal === true,
-        ...snapshot.appHint === void 0 && currentAppHint !== void 0 ? { appHint: currentAppHint } : {}
-      }
-    ])
+    Object.entries(stored).map(([id, snapshot]) => [id, {
+      id: snapshot.id,
+      source: snapshot.source,
+      identityKey: snapshot.identityKey,
+      title: snapshot.title,
+      startTime: snapshot.startTime,
+      endTime: snapshot.endTime,
+      isFinal: snapshot.isFinal === true,
+      attributes: snapshot.attributes
+    }])
   );
 }
 function normalizePolicy(durable, legacyEnabled, legacyFlushPeriod) {
@@ -1058,18 +1057,9 @@ const deps = {
   newId: uuidv7,
   identityKeyOf,
   domainOf,
-  siteOf,
-  appHint: detectAppHint()
+  siteOf
 };
-const delivery = createChromeBrowserDelivery(deps.appHint);
-function detectAppHint() {
-  const nav = navigator;
-  return detectBrowserAppHint({
-    brands: nav.userAgentData?.brands?.map((b) => b.brand),
-    userAgent: nav.userAgent,
-    hasBraveApi: typeof nav.brave?.isBrave === "function"
-  });
-}
+const delivery = createChromeBrowserDelivery();
 let chain = Promise.resolve();
 function serialized(fn) {
   const next = chain.then(fn, fn);

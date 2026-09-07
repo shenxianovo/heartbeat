@@ -1,19 +1,28 @@
 import type { SegmentSnapshot } from './fold'
 import { uuidv7 } from './ids'
 
-const ROUTE = '/v1/collector-protocol/browser'
-const ARTIFACT_ID = 'browser.extension'
-const TEST_ARTIFACT_HASH = `sha256:${'0'.repeat(64)}`
+const ROUTE = '/v1/collector-protocol/external-host'
 
-async function browserArtifactHash(): Promise<string> {
-  if (typeof chrome === 'undefined' || !chrome.runtime?.getURL) return TEST_ARTIFACT_HASH
+interface BrowserPackageReference {
+  packageId: string
+  packageVersion: string
+  packageContentHash: string
+  artifactId: string
+  artifactHash: string
+}
+
+async function browserPackageReference(): Promise<BrowserPackageReference> {
   const response = await fetch(chrome.runtime.getURL('collector-artifact-ref.json'))
-  if (!response.ok) throw new Error('browser Package metadata is unavailable')
-  const metadata = await response.json() as { artifactHash?: unknown }
-  if (typeof metadata.artifactHash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(metadata.artifactHash)) {
-    throw new Error('browser Package metadata has an invalid artifact hash')
+  if (!response.ok) throw new Error('Browser Package metadata is unavailable')
+  const metadata = await response.json() as BrowserPackageReference
+  if (metadata?.packageId !== 'heartbeat.collector.browser' ||
+      metadata.artifactId !== 'browser.extension' ||
+      typeof metadata.packageVersion !== 'string' || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(metadata.packageVersion) ||
+      ![metadata.packageContentHash, metadata.artifactHash].every(value =>
+        typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value))) {
+    throw new Error('Browser Package metadata is invalid')
   }
-  return metadata.artifactHash
+  return metadata
 }
 
 export interface BrowserProtocolSession {
@@ -169,7 +178,7 @@ export function acknowledgedSnapshotIds(
 
 export async function openBrowserProtocolSession(
   port: number,
-  appHint: string,
+  appIdentityKey: string,
   externalHostIdentity: string,
   attempt: BrowserActivationAttempt,
   applySpec?: (spec: { enabled: boolean; flushPeriodMilliseconds: number }) => Promise<void>,
@@ -184,14 +193,13 @@ export async function openBrowserProtocolSession(
         attempt.helloMessageId,
         undefined,
         {
-        artifactId: ARTIFACT_ID,
-        artifactHash: await browserArtifactHash(),
+        ...await browserPackageReference(),
         protocolMajors: [1],
         supportedCapabilities: {
           'facts.segment': [1],
           'diagnostics.stream-gap': [1],
         },
-        appHint,
+        appIdentityKey,
         externalHostIdentity,
       })),
     })
@@ -434,7 +442,7 @@ export async function publishBrowserFacts(
 
 export async function uploadWithBrowserProtocol(
   port: number,
-  appHint: string | undefined,
+  appIdentityKey: string | undefined,
   externalHostIdentity: string,
   snapshots: SegmentSnapshot[],
   previousSession?: BrowserProtocolSession,
@@ -446,7 +454,7 @@ export async function uploadWithBrowserProtocol(
   pendingGap?: BrowserPendingGap,
   persistGapAttempt?: (gap: BrowserPendingGap) => Promise<void>,
 ): Promise<ProtocolUploadResult> {
-  if (!appHint || !externalHostIdentity) return { kind: 'unavailable' }
+  if (!appIdentityKey || !externalHostIdentity) return { kind: 'unavailable' }
   if (snapshots.some((snapshot) => !isUuidV7(snapshot.id))) return { kind: 'unavailable' }
   const renewed = previousSession?.port === port
     ? await renewBrowserProtocolSession(previousSession)
@@ -460,7 +468,7 @@ export async function uploadWithBrowserProtocol(
   if (renewed === null) await persistActivationAttempt?.(activationAttempt)
   const session = renewed ?? await openBrowserProtocolSession(
     port,
-    appHint,
+    appIdentityKey,
     externalHostIdentity,
     activationAttempt,
     applySpec,

@@ -8,15 +8,15 @@ export const PORT_RANGE = 10
 
 /** 单端口探测超时：loopback 应答在毫秒级，超时即视为无人/非 hub。 */
 const PROBE_TIMEOUT_MS = 1500
-/** 只认 Browser binding 自己的发现端点，避免把别的 loopback 服务当成 Hub。 */
+/** 只认通用 ExternalHost 发现端点，避免把别的 loopback 服务当成 Hub。 */
 export async function probeHub(port: number): Promise<boolean> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/v1/collector-protocol/browser`, {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/collector-protocol/external-host`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
     if (!res.ok) return false
     const body = (await res.json()) as { binding?: unknown; protocolMajors?: unknown }
-    return body.binding === 'browser' &&
+    return body.binding === 'external-host' &&
       Array.isArray(body.protocolMajors) && body.protocolMajors.includes(1)
   } catch {
     return false
@@ -54,7 +54,7 @@ export class LoopbackBrowserHubAdapter implements BrowserHubAdapter {
   deliverProtocol(request: BrowserProtocolDeliveryRequest) {
     return uploadWithBrowserProtocol(
       request.port,
-      request.appHint,
+      request.appIdentityKey,
       request.externalHostIdentity,
       request.snapshots,
       request.previousSession,

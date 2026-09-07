@@ -1,0 +1,161 @@
+name: Collector Release · Browser
+run-name: Browser Collector Release · ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['collector-browser/v*']
+
+concurrency:
+  group: collector-browser-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE_ID: heartbeat.collector.browser
+  REGISTRY_BASE_URL: https://heartbeat.shenxianovo.com/collector-registry/v1
+
+jobs:
+  build:
+    name: Build one immutable Browser Package for four desktop targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate the dedicated Collector tag
+        id: version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_REF_NAME" =~ ^collector-browser/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "version=${GITHUB_REF_NAME#collector-browser/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Expected collector-browser/vX.Y.Z, got: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: collection/collectors/Heartbeat.Collector.Browser/package-lock.json
+      # Only the Collector-owned cross-language fixture builds .NET; no Desktop is built.
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - name: Build and verify the Browser Collector
+        working-directory: collection/collectors/Heartbeat.Collector.Browser
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - name: Assemble the exact release
+        env:
+          COLLECTOR_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/collector-contracts.mjs check
+          node scripts/collector-contracts.mjs stage browser collector-package --version "$COLLECTOR_VERSION"
+          python3 scripts/package-browser-release.py --package collector-package \
+            --version "$COLLECTOR_VERSION" --output release-output --base-url "$REGISTRY_BASE_URL"
+          cp scripts/publish-collector-release.py release-output/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: collector-browser-${{ steps.version.outputs.version }}
+          path: release-output/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish static files without rebuilding or restarting any Host
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: collector-browser-${{ needs.build.outputs.version }}
+          path: release-output
+      - name: Prepare isolated server staging
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -eu
+            staging='/tmp/heartbeat-browser-release-${{ github.run_id }}-${{ github.run_attempt }}'
+            mkdir -p -- "$staging"
+      - name: Upload exact release files
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: release-output
+          target: /tmp/heartbeat-browser-release-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Install immutable target directories
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -eu
+            source='/tmp/heartbeat-browser-release-${{ github.run_id }}-${{ github.run_attempt }}/release-output'
+            python3 "$source/publish-collector-release.py" --release "$source" \
+              --registry /srv/heartbeat/collector-registry/v1 --phase install
+      - name: Verify every public exact release before advancing Catalog
+        env:
+          COLLECTOR_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          artifact="$PACKAGE_ID-$COLLECTOR_VERSION.zip"
+          for target in windows-x64 windows-arm64 macos-x64 macos-arm64; do
+            url="$REGISTRY_BASE_URL/packages/$PACKAGE_ID/versions/$COLLECTOR_VERSION/$target"
+            curl --fail --silent --show-error --location --retry 12 --retry-delay 5 \
+              "$url/$artifact?release-run=$GITHUB_RUN_ID" --output "$RUNNER_TEMP/$artifact"
+            curl --fail --silent --show-error --location --retry 12 --retry-delay 5 \
+              "$url/release.json?release-run=$GITHUB_RUN_ID" --output "$RUNNER_TEMP/release.json"
+            cmp "release-output/$artifact" "$RUNNER_TEMP/$artifact"
+            cmp "release-output/$target/release.json" "$RUNNER_TEMP/release.json"
+          done
+      - name: Advance only this Collector's target entries under the shared Catalog lock
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -eu
+            source='/tmp/heartbeat-browser-release-${{ github.run_id }}-${{ github.run_attempt }}/release-output'
+            python3 "$source/publish-collector-release.py" --release "$source" \
+              --registry /srv/heartbeat/collector-registry/v1 --phase catalog
+      - name: Verify public Catalog targets
+        env:
+          COLLECTOR_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --location --retry 12 --retry-delay 5 \
+            "$REGISTRY_BASE_URL/catalog.json?release-run=$GITHUB_RUN_ID" --output "$RUNNER_TEMP/catalog.json"
+          for target in windows-x64 windows-arm64 macos-x64 macos-arm64; do
+            jq -e --arg id "$PACKAGE_ID" --arg version "$COLLECTOR_VERSION" \
+              --arg os "${target%-*}" --arg arch "${target#*-}" '
+                [.packages[] | select(.packageId == $id) | .latest[] |
+                 select(.target.os == $os and .target.arch == $arch)] as $entries |
+                ($entries | length) == 1 and
+                (($entries[0].version | split(".") | map(tonumber)) >= ($version | split(".") | map(tonumber)))
+              ' "$RUNNER_TEMP/catalog.json" >/dev/null
+          done
+      - name: Remove isolated server staging
+        if: always()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -eu
+            rm -rf -- '/tmp/heartbeat-browser-release-${{ github.run_id }}-${{ github.run_attempt }}'

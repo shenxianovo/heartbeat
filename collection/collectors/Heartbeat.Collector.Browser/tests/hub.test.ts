@@ -15,7 +15,7 @@ function installFetchMock(ports: Record<number, PortBehavior>) {
     const behavior = ports[Number(new URL(url).port)]
     if (!behavior) throw new TypeError('fetch failed')
     if (behavior.kind === 'stranger') return new Response('not found', { status: behavior.status })
-    return Response.json({ binding: 'browser', protocolMajors: behavior.protocolMajors ?? [1] })
+    return Response.json({ binding: 'external-host', protocolMajors: behavior.protocolMajors ?? [1] })
   }))
   return calls
 }
@@ -26,7 +26,7 @@ describe('Browser binding discovery', () => {
   it('accepts only the binding-specific endpoint and a common protocol major', async () => {
     const calls = installFetchMock({ [BASE]: { kind: 'binding' } })
     await expect(probeHub(BASE)).resolves.toBe(true)
-    expect(calls).toEqual([`http://127.0.0.1:${BASE}/v1/collector-protocol/browser`])
+    expect(calls).toEqual([`http://127.0.0.1:${BASE}/v1/collector-protocol/external-host`])
 
     installFetchMock({ [BASE]: { kind: 'binding', protocolMajors: [2] } })
     await expect(probeHub(BASE)).resolves.toBe(false)

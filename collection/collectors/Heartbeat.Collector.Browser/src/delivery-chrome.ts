@@ -1,5 +1,6 @@
 import type { SegmentSnapshot } from './fold'
 import { uuidv7 } from './ids'
+import { detectBrowserAppIdentity } from './app-identity'
 import { loadConfig } from './config'
 import { LoopbackBrowserHubAdapter } from './hub'
 import {
@@ -39,7 +40,8 @@ type PersistedSegmentSnapshot = Omit<SegmentSnapshot, 'isFinal'> & {
 
 /** Production storage adapter；所有 Chrome key 与旧布局迁移都停在这个内部 seam。 */
 export class ChromeBrowserDeliveryStore implements BrowserDeliveryStore {
-  constructor(private readonly currentAppHint: string | undefined) {}
+  private sessionStarted = false
+
 
   async loadDurable(): Promise<BrowserDeliveryDurableState> {
     const [local, transient] = await Promise.all([
@@ -66,7 +68,7 @@ export class ChromeBrowserDeliveryStore implements BrowserDeliveryStore {
       await chrome.storage.local.set({ [PENDING_GAP_KEY]: pendingGaps.value })
     }
     return {
-      queue: normalizeQueuedSnapshots(rawQueue, this.currentAppHint),
+      queue: normalizeQueuedSnapshots(rawQueue),
       pendingGaps: pendingGaps.value,
       deadLetters: Array.isArray(local[DEAD_LETTER_KEY])
         ? local[DEAD_LETTER_KEY] as SegmentSnapshot[]
@@ -85,6 +87,14 @@ export class ChromeBrowserDeliveryStore implements BrowserDeliveryStore {
   }
 
   async loadSession(): Promise<BrowserDeliverySessionState> {
+    if (!this.sessionStarted) {
+      // A Service Worker owns one run. Unacknowledged Facts/Gaps remain in durable storage,
+      // but the next worker negotiates a fresh Activation for the same External Host identity.
+      await chrome.storage.session.remove([
+        PROTOCOL_SESSION_KEY, PROTOCOL_ACTIVATION_ATTEMPT_KEY, PROTOCOL_PUBLISH_ATTEMPT_KEY,
+      ])
+      this.sessionStarted = true
+    }
     const got = await chrome.storage.session.get([
       BACKOFF_KEY,
       HUB_PORT_KEY,
@@ -122,6 +132,7 @@ export class ChromeBrowserDeliveryStore implements BrowserDeliveryStore {
       ...(state.publishAttempt === undefined ? [PROTOCOL_PUBLISH_ATTEMPT_KEY] : []),
     ]
     if (remove.length > 0) await chrome.storage.session.remove(remove)
+    this.sessionStarted = true
   }
 }
 
@@ -140,11 +151,23 @@ function normalizePendingGaps(raw: unknown): { value: BrowserPendingGap[]; migra
   return { value, migrated }
 }
 
-export function createChromeBrowserDelivery(appHint: string | undefined): BrowserDelivery {
+export function createChromeBrowserDelivery(): BrowserDelivery {
   return createBrowserDelivery({
-    store: new ChromeBrowserDeliveryStore(appHint),
+    store: new ChromeBrowserDeliveryStore(),
     hub: new LoopbackBrowserHubAdapter(),
-    appHint,
+    loadAppIdentityKey: async () => {
+      const nav = navigator as Navigator & {
+        userAgentData?: { brands?: { brand: string }[] }
+        brave?: unknown
+      }
+      const platform = await chrome.runtime.getPlatformInfo()
+      return detectBrowserAppIdentity({
+        platform: platform.os,
+        brands: nav.userAgentData?.brands?.map(item => item.brand),
+        userAgent: nav.userAgent,
+        hasBraveApi: nav.brave !== undefined,
+      })
+    },
     loadBasePort: async () => (await loadConfig()).port,
     loadExternalHostIdentity,
   })
@@ -161,19 +184,18 @@ export async function loadExternalHostIdentity(): Promise<string> {
 
 function normalizeQueuedSnapshots(
   stored: Record<string, PersistedSegmentSnapshot>,
-  currentAppHint: string | undefined,
 ): Record<string, SegmentSnapshot> {
   return Object.fromEntries(
-    Object.entries(stored).map(([id, { appName: _legacyAppName, ...snapshot }]) => [
-      id,
-      {
-        ...snapshot,
-        isFinal: snapshot.isFinal === true,
-        ...(snapshot.appHint === undefined && currentAppHint !== undefined
-          ? { appHint: currentAppHint }
-          : {}),
-      },
-    ]),
+    Object.entries(stored).map(([id, snapshot]) => [id, {
+      id: snapshot.id,
+      source: snapshot.source,
+      identityKey: snapshot.identityKey,
+      title: snapshot.title,
+      startTime: snapshot.startTime,
+      endTime: snapshot.endTime,
+      isFinal: snapshot.isFinal === true,
+      attributes: snapshot.attributes,
+    }]),
   )
 }
 

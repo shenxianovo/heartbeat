@@ -1,6 +1,6 @@
 # Collector Host Runtime 与独立 Package 交付
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Problem
 
@@ -18,11 +18,9 @@ Instance，Runtime 成为动态 Instance 唯一权威。Headless 独立 deploy�
 而非整个 Instance 隔离。Desktop Marketplace 已实现并与 Headless 共用完整生命周期 Runtime；当前主缺口是
 Browser 独立 Release 与真实 Desktop Browser 纵切，Desktop 最终包的新启动 smoke 仍待 CI/human gate。
 
-Browser 现在的状态是“代码与 Desktop 解耦、但尚未形成 Web Release 和宿主接入”：它不进 Desktop 构建与产物，扩展代码、Package
-构建 target 与 npm 测试留在 `collection/collectors/Heartbeat.Collector.Browser` 并由 `collector-contracts.yml`
-验证；但宿主里没有 Browser runtime、专属 protocol handler、安装目录或 UI 条目，`/v1/collector-protocol/browser`
-也不存在。宿主侧的通用接入能力已经就位（issue 06），Browser 要重新连上只差自己的 Package 发布与被安装
-（issue 07）；Desktop Marketplace 调用者已经完成（issue 10），宿主不会为它加任何具名分支。
+Browser 已实现通用协议适配、精确 Package 身份、Marketplace manifest 与四 target 独立 release workflow，
+并由 Collector-owned 真实 TypeScript → .NET handler 测试验证互通。首个公开 tag、最终 Desktop 发布与
+Windows/macOS Chrome/Edge 实机验收仍待完成（issue 07 ready-for-human）。宿主无需恢复任何具名分支。
 
 2026-09-01 以前的 Registry/Approve/Switch 实现已撤回。issues 01/02 已按 ADR-048/050 完成；issues 06/07
 已按 [ADR-051](../../docs/adr/051-generic-external-host-identity-and-browser-delivery.md) 重写，issue 10 承接
@@ -87,7 +85,7 @@ Browser 独立发布与真实 smoke。
 | 04 exact package approval | wontfix | ADR-048 明确不做 approval/offer |
 | 05 VRChat ready switch | wontfix | ADR-048 明确不做 candidate/LKG switch |
 | 06 generic ExternalHost | ready-for-human | 通用 route、身份级 Activation/Stream ownership 与卸载已实现 |
-| 07 Browser release and smoke | ready-for-agent | Browser Collector 自身、四 target Release 与真实 smoke |
+| 07 Browser release and smoke | ready-for-human | 代码与自动验证完成；首个 tag、最终 Desktop 下载版与实机 smoke 待验收 |
 | 10 Desktop Marketplace | ready-for-human | 实现与自动测试完成；最终 Windows/macOS 包启动 smoke 待 CI |
 
 ## Exit conditions
@@ -167,3 +165,11 @@ Fact Stream。
 `OperationCanceledException`（现按握手同一口径给 `activation_stopping`）；ExternalHost hello 曾直接创建持久
 Instance（现在只解析安装时按 Default Instance Blueprint 创建的 Instance）。收口 review 还修正了冲突 hello
 先踢掉健康 owner，以及 handler 写死 `facts.segment` 两处语义错误。细节见 issue 06 comments。
+
+### 2026-09-07 — Browser implementation closeout
+
+issue 07 代码与自动验证完成：Browser 使用通用 ExternalHost 协议和精确 Package 身份；独立 tag workflow
+为四 target 发布相同 artifact bytes。Browser 84 tests（含真实 .NET handler 互通）、完整 .NET solution、
+Collector contracts 与 workflow 静态检查通过，Standards/Spec review 均无待修发现。
+当前剩余为 Human gate：Browser 首个真实 tag、公网 metadata/artifact 回读、新版 Desktop 发布及跨平台浏览器
+实机验收。PRD 与 issue 07 均为 ready-for-human，不将本地候选或自动 fixture 视为已交付的下载版。

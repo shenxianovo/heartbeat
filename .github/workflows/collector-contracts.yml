@@ -28,21 +28,21 @@ jobs:
           cache: npm
           cache-dependency-path: collection/collectors/Heartbeat.Collector.Browser/package-lock.json
 
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
       - name: Verify Browser Collector
         working-directory: collection/collectors/Heartbeat.Collector.Browser
         run: |
           npm ci
-          npm test
           npm run build
+          npm test
 
       - name: Verify Collector Fact contracts
         env:
           CONTRACT_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: node scripts/collector-contracts.mjs check --base-ref "$CONTRACT_BASE_REF"
-
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
 
       - name: Restore Collection test dependencies
         run: dotnet restore Heartbeat.Collection.Tests.slnf

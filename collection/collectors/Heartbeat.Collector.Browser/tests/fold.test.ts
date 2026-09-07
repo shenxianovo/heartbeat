@@ -15,7 +15,6 @@ function makeDeps(): FoldDeps {
     identityKeyOf,
     domainOf,
     siteOf,
-    appHint: 'edge',
   }
 }
 
@@ -53,8 +52,7 @@ describe('applyEvent', () => {
       id: 'id-1',
       source: 'browser',
       identityKey: 'https://a.com/x',
-      appHint: 'edge',
-      startTime: new Date(T0).toISOString(),
+        startTime: new Date(T0).toISOString(),
       endTime: new Date(T0 + 5000).toISOString(),
       isFinal: true,
     })
@@ -123,8 +121,8 @@ describe('flush（ADR-018 稳定 Id 快照）', () => {
     })
   })
 
-  it('品牌未知时省略 appHint，但保留段的其余事实', () => {
-    const deps = { ...makeDeps(), appHint: undefined }
+  it('段只携带观测内容，App 身份属于 Stream', () => {
+    const deps = makeDeps()
     const { state } = applyEvent(emptyState(), activated(1, 'https://a.com/x', T0), deps)
     const [snapshot] = flush(state, T0 + 1000, deps).out
 

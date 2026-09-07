@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SegmentSnapshot } from '../src/fold'
 import {
   acknowledgedSnapshotIds,
@@ -11,11 +11,22 @@ import {
   type BrowserPendingGap,
 } from '../src/protocol'
 
+const packageReference = {
+  packageId: 'heartbeat.collector.browser', packageVersion: '0.1.0',
+  packageContentHash: `sha256:${'1'.repeat(64)}`,
+  artifactId: 'browser.extension', artifactHash: `sha256:${'2'.repeat(64)}`,
+}
+
+beforeEach(() => vi.stubGlobal('chrome', { runtime: { getURL: (path: string) => `chrome-extension://fixture/${path}` } }))
+function protocolFetch(handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith('chrome-extension://')
+    ? Promise.resolve(Response.json(packageReference)) : handler(input, init))
+}
+
 const snapshot = (id = '0198d5eb-fc31-7d7b-8bf0-c2d009ec8999'): SegmentSnapshot => ({
   id,
   source: 'browser',
   identityKey: 'https://example.com/docs',
-  appHint: 'edge',
   title: 'Docs',
   startTime: '2026-08-25T08:00:00.000Z',
   endTime: '2026-08-25T08:01:00.000Z',
@@ -43,7 +54,7 @@ const protocolResponse = (
 })
 
 describe('browser Collector Protocol outbox', () => {
-  it('canonical Fact excludes AppHint while preserving typed browser payload', () => {
+  it('canonical Fact excludes App identity while preserving typed browser payload', () => {
     const fact = toProtocolFact(snapshot(), '0198d5e2-e0d4-7b30-9da7-342ee261bf62')!
     expect(fact.payload).toEqual({
       identityKey: 'https://example.com/docs',
@@ -68,7 +79,7 @@ describe('browser Collector Protocol outbox', () => {
   it('old non-UUIDv7 cache remains unavailable without entering a legacy transport', async () => {
     await expect(uploadWithBrowserProtocol(
       24820,
-      'edge',
+      'win:msedge',
       'host-a',
       [snapshot('legacy-id')],
     )).resolves.toEqual({
@@ -78,7 +89,7 @@ describe('browser Collector Protocol outbox', () => {
 
   it('happy path negotiates Spec, opens Stream, and returns per-Fact ACK identities', async () => {
     const calls: { url: string; body: unknown }[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', protocolFetch(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const request = init?.body ? JSON.parse(String(init.body)) : undefined
       calls.push({ url, body: request })
@@ -109,7 +120,7 @@ describe('browser Collector Protocol outbox', () => {
     const applySpec = vi.fn(async () => {})
     const result = await uploadWithBrowserProtocol(
       24820,
-      'edge',
+      'win:msedge',
       'host-a',
       [snapshot()],
       undefined,
@@ -123,11 +134,13 @@ describe('browser Collector Protocol outbox', () => {
     expect(result.kind).toBe('acked')
     expect(applySpec).toHaveBeenCalledWith({ enabled: true, flushPeriodMilliseconds: 30_000 })
     if (result.kind === 'acked') expect(result.acknowledgedIds).toEqual([snapshot().id])
+    expect(calls.every(call => call.url.includes('/v1/collector-protocol/external-host/'))).toBe(true)
     expect(calls.map((call) => call.url.split('/').at(-1))).toEqual([
       'hello', 'initialize', 'initialized', 'streams', 'ready', 'facts',
     ])
     expect((calls[0].body as { body: object }).body).toMatchObject({
-      appHint: 'edge',
+        ...packageReference,
+      appIdentityKey: 'win:msedge',
       externalHostIdentity: 'host-a',
     })
     expect((calls[5].body as { body: { facts: { payload: object }[] } }).body.facts[0].payload).not.toHaveProperty('appHint')
@@ -135,7 +148,7 @@ describe('browser Collector Protocol outbox', () => {
 
   it('opens the Package-backed protocol session even when the outbox is empty', async () => {
     const calls: string[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', protocolFetch(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const request = init?.body ? JSON.parse(String(init.body)) : undefined
       calls.push(url)
@@ -157,7 +170,7 @@ describe('browser Collector Protocol outbox', () => {
       }, ACTIVATION_ID, request.messageId)
     }))
 
-    const result = await uploadWithBrowserProtocol(24820, 'edge', 'host-a', [])
+    const result = await uploadWithBrowserProtocol(24820, 'win:msedge', 'host-a', [])
 
     expect(result.kind).toBe('acked')
     if (result.kind === 'acked') expect(result.acknowledgedIds).toEqual([])
@@ -170,7 +183,7 @@ describe('browser Collector Protocol outbox', () => {
     const messageIds: string[] = []
     const revisions: number[] = []
     let loseResponse = true
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', protocolFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as {
         messageId: string
         body: { facts: unknown[] }
@@ -223,7 +236,7 @@ describe('browser Collector Protocol outbox', () => {
 
   it('mints a new publish messageId when recovery creates a new Activation', async () => {
     let sentMessageId = ''
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', protocolFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { messageId: string }
       sentMessageId = request.messageId
       return protocolResponse(
@@ -258,7 +271,7 @@ describe('browser Collector Protocol outbox', () => {
 
   it('uses a conservative UTF-8 limit and skips an oversized head without dropping it', async () => {
     let publishedFactId = ''
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', protocolFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as {
         body: { facts: { factId: string }[] }
       }
@@ -293,7 +306,7 @@ describe('browser Collector Protocol outbox', () => {
 
   it('surfaces permanent rejection and retry timing separately from ACKs', async () => {
     let sentMessageId = ''
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', protocolFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const wire = JSON.parse(String(init?.body)) as { messageId: string }
       sentMessageId = wire.messageId
       return protocolResponse('facts.ack', {
@@ -329,7 +342,7 @@ describe('browser Collector Protocol outbox', () => {
   })
 
   it('does not treat a miscorrelated 2xx response as an explicit Fact ACK', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => protocolResponse(
+    vi.stubGlobal('fetch', protocolFetch(async () => protocolResponse(
       'facts.ack',
       { results: [{ index: 0, status: 'committed' }] },
       ACTIVATION_ID,
@@ -354,7 +367,7 @@ describe('browser Collector Protocol outbox', () => {
 
   it('reports bounded-outbox loss through the durable stream-gap capability', async () => {
     let request: { messageId?: string; body?: { gap?: { gapId?: string; reason?: string } } } = {}
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', protocolFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
       request = JSON.parse(String(init?.body))
       return protocolResponse(
         'stream.gapAck',

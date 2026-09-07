@@ -41,7 +41,7 @@ function installChrome(
 
 const legacySnapshot = {
   id: '0198d5eb-fc31-7d7b-8bf0-000000000001',
-  source: 'browser',
+  source: 'browser' as const,
   identityKey: 'https://example.com/page',
   appName: 'msedge',
   title: 'Example',
@@ -58,6 +58,25 @@ const legacySnapshot = {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('ChromeBrowserDeliveryStore adapter contract', () => {
+  it('starts a new worker Activation while retaining durable Facts and Profile identity', async () => {
+    installChrome()
+    const first = new ChromeBrowserDeliveryStore()
+    const identity = await loadExternalHostIdentity()
+    await first.saveSession({
+      ...defaultBrowserDeliverySession(),
+      activationAttempt: {
+        helloMessageId: 'old', initializedMessageId: 'old', streamsMessageId: 'old', readyMessageId: 'old',
+      },
+    })
+    const durable = await first.loadDurable()
+    durable.queue[legacySnapshot.id] = { ...legacySnapshot, isFinal: true }
+    await first.saveDurable(durable)
+    const restarted = new ChromeBrowserDeliveryStore()
+    expect((await restarted.loadSession()).activationAttempt).toBeUndefined()
+    expect(Object.keys((await restarted.loadDurable()).queue)).toEqual([legacySnapshot.id])
+    expect(await loadExternalHostIdentity()).toBe(identity)
+  })
+
   it('persists one External Host identity in local storage and creates a new one after reset', async () => {
     const { localArea, sessionArea } = installChrome()
 
@@ -87,13 +106,13 @@ describe('ChromeBrowserDeliveryStore adapter contract', () => {
       browserCollectorFlushPeriodMs: 60_000,
       backoff: { fails: 2, nextAttemptAt: 123_000 },
     })
-    const store = new ChromeBrowserDeliveryStore('edge')
+    const store = new ChromeBrowserDeliveryStore()
 
     const durable = await store.loadDurable()
     const recovered = durable.queue[legacySnapshot.id]
 
     expect(recovered).not.toHaveProperty('appName')
-    expect(recovered).toMatchObject({ appHint: 'edge', isFinal: false })
+    expect(recovered).toMatchObject({ isFinal: false })
     expect(durable.pendingGaps).toHaveLength(1)
     expect(durable.pendingGaps[0].gapId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7/)
     expect((localArea.values.browserCollectorPendingGap as Array<{ gapId: string }>)[0].gapId)
@@ -106,28 +125,28 @@ describe('ChromeBrowserDeliveryStore adapter contract', () => {
 
   it('persists collection policy in local storage across a browser restart', async () => {
     const { sessionArea } = installChrome()
-    const store = new ChromeBrowserDeliveryStore('edge')
+    const store = new ChromeBrowserDeliveryStore()
     const durable = await store.loadDurable()
     durable.policy = { enabled: false, flushPeriodMilliseconds: 90_000 }
     await store.saveDurable(durable)
 
     sessionArea.values = {}
 
-    await expect(new ChromeBrowserDeliveryStore('edge').loadDurable()).resolves.toMatchObject({
+    await expect(new ChromeBrowserDeliveryStore().loadDurable()).resolves.toMatchObject({
       policy: { enabled: false, flushPeriodMilliseconds: 90_000 },
     })
   })
 
   it('round-trips session attempts and removes obsolete optional fields', async () => {
     installChrome()
-    const store = new ChromeBrowserDeliveryStore('edge')
+    const store = new ChromeBrowserDeliveryStore()
     const state = {
       ...defaultBrowserDeliverySession(),
       hubPort: 24_821,
       publishAttempt: {
         activationId: '0198d5e8-30cb-7d54-bab1-250087147e4c',
         messageId: '0198d5eb-fc31-7d7b-8bf0-000000000010',
-        snapshots: [{ ...legacySnapshot, appHint: 'edge', isFinal: false } as SegmentSnapshot],
+        snapshots: [{ ...legacySnapshot, isFinal: false } as SegmentSnapshot],
       },
     }
     await store.saveSession(state)

@@ -48,18 +48,19 @@ public interface ICollectorMarketplace
     IReadOnlyList<CollectorMarketplaceRuntimeItem> InstalledSnapshot();
     ValueTask<IReadOnlyList<CollectorMarketplaceRuntimeItem>> BrowseAsync(
         CancellationToken cancellationToken = default);
-    ValueTask<CollectorMarketplaceRuntimeItem> InstallAsync(
-        string packageId,
-        CancellationToken cancellationToken = default);
-    ValueTask<CollectorMarketplaceRuntimeItem> RetryAsync(
-        string packageId,
-        CancellationToken cancellationToken = default);
-    ValueTask UninstallAsync(string packageId, CancellationToken cancellationToken = default);
-    ValueTask SubmitAuthorizationAsync(
+    HostManagementOperation Install(string packageId);
+    HostManagementOperation Retry(string packageId);
+    HostManagementOperation Uninstall(string packageId);
+    HostManagementOperation SubmitAuthorization(
         Guid collectorInstanceId,
         Guid interactionId,
-        IReadOnlyDictionary<string, string> values,
+        IReadOnlyDictionary<string, string> values);
+    IReadOnlyList<HostManagementOperation> OperationsSnapshot();
+    HostManagementOperation GetOperation(Guid operationId);
+    ValueTask<HostManagementOperation> WaitForOperationAsync(
+        Guid operationId,
         CancellationToken cancellationToken = default);
+    HostManagementOperationCancellation CancelOperation(Guid operationId);
 }
 
 public interface ICollectorMarketplaceRuntime : ICollectorMarketplace, IAsyncDisposable
@@ -85,6 +86,7 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
     private readonly object _stateGate = new();
     private readonly object _lifecycleGate = new();
     private readonly SemaphoreSlim _operations = new(1, 1);
+    private readonly HostManagementOperationOwner _management = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _initialized =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -123,6 +125,58 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
     }
 
     public Task Initialized => _initialized.Task;
+
+    public HostManagementOperation Install(string packageId) => _management.Start(
+        HostManagementOperationKind.Install,
+        packageId,
+        packageId,
+        execution => InstallCoreAsync(packageId, execution).AsTask());
+
+    public HostManagementOperation Retry(string packageId) => _management.Start(
+        HostManagementOperationKind.Retry,
+        packageId,
+        packageId,
+        execution => RetryCoreAsync(packageId, execution).AsTask());
+
+    public HostManagementOperation Uninstall(string packageId) => _management.Start(
+        HostManagementOperationKind.Uninstall,
+        packageId,
+        packageId,
+        execution => UninstallCoreAsync(packageId, execution).AsTask());
+
+    public HostManagementOperation SubmitAuthorization(
+        Guid collectorInstanceId,
+        Guid interactionId,
+        IReadOnlyDictionary<string, string> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var acceptedValues = values.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value,
+            StringComparer.Ordinal);
+        var packageId = _runtime.GetInstance(collectorInstanceId).PackageId;
+        return _management.Start(
+            HostManagementOperationKind.SubmitAuthorization,
+            packageId,
+            $"{collectorInstanceId:D}/{interactionId:D}",
+            execution => SubmitAuthorizationCoreAsync(
+                collectorInstanceId,
+                interactionId,
+                acceptedValues,
+                execution).AsTask());
+    }
+
+    public IReadOnlyList<HostManagementOperation> OperationsSnapshot() => _management.Snapshot();
+
+    public ValueTask<HostManagementOperation> WaitForOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        _management.WaitAsync(operationId, cancellationToken);
+
+    public HostManagementOperation GetOperation(Guid operationId) => _management.Get(operationId);
+
+    public HostManagementOperationCancellation CancelOperation(Guid operationId) =>
+        _management.Cancel(operationId);
 
     public void Start()
     {
@@ -187,19 +241,33 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         }
     }
 
-    public async ValueTask<CollectorMarketplaceRuntimeItem> InstallAsync(
+    private async ValueTask<CollectorMarketplaceRuntimeItem> InstallCoreAsync(
         string packageId,
-        CancellationToken cancellationToken = default)
+        HostManagementOperationExecution execution)
     {
-        using var operation = LinkedOperation(cancellationToken);
-        var operationToken = operation.Token;
+        var result = await InstallCoreAsync(
+            packageId,
+            execution.SafeCancellation,
+            execution.BeginCommit);
+        return result;
+    }
+
+    private async ValueTask<CollectorMarketplaceRuntimeItem> InstallCoreAsync(
+        string packageId,
+        CancellationToken operationToken,
+        Action beginCommit)
+    {
         await Initialized.WaitAsync(operationToken);
         await _operations.WaitAsync(operationToken);
         try
         {
-            ThrowIfStopping();
-            var installed = await _installations.InstallAsync(packageId, operationToken);
-            await AttachAsync(installed, operationToken);
+            var installed = await _installations.InstallAsync(
+                packageId,
+                beginCommit,
+                operationToken);
+            await AttachAsync(
+                installed,
+                CancellationToken.None);
             StartSelectedDriver(installed);
             return Snapshot(CatalogItem(installed), Inspection(installed));
         }
@@ -209,17 +277,22 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         }
     }
 
-    public async ValueTask<CollectorMarketplaceRuntimeItem> RetryAsync(
+    private ValueTask<CollectorMarketplaceRuntimeItem> RetryCoreAsync(
         string packageId,
-        CancellationToken cancellationToken = default)
+        HostManagementOperationExecution execution) => RetryCoreAsync(
+            packageId,
+            execution.SafeCancellation,
+            execution.BeginCommit);
+
+    private async ValueTask<CollectorMarketplaceRuntimeItem> RetryCoreAsync(
+        string packageId,
+        CancellationToken operationToken,
+        Action beginCommit)
     {
-        using var operation = LinkedOperation(cancellationToken);
-        var operationToken = operation.Token;
         await Initialized.WaitAsync(operationToken);
         await _operations.WaitAsync(operationToken);
         try
         {
-            ThrowIfStopping();
             var inspection = _installations.InspectInstalled()
                 .SingleOrDefault(item => item.Instance.PackageId == packageId)
                 ?? throw new KeyNotFoundException($"Collector Package '{packageId}' is not installed.");
@@ -228,8 +301,7 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
                     inspection.Failure ?? "Collector Package Installation is unavailable.");
             var installed = new InstalledCollectorPackage(inspection.Installation!, inspection.Instance);
             await AttachAsync(installed, operationToken);
-            // The caller token is honored before this point. Once replacement begins, finish
-            // stopping the old owner so cancellation cannot orphan it outside the shutdown fence.
+            beginCommit();
             await StopManagedAsync(inspection.Instance.CollectorInstanceId, CancellationToken.None);
             ClearHostFailure(inspection.Instance.CollectorInstanceId);
             StartSelectedDriver(installed);
@@ -241,23 +313,27 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         }
     }
 
-    public async ValueTask UninstallAsync(
+    private ValueTask UninstallCoreAsync(
         string packageId,
-        CancellationToken cancellationToken = default)
+        HostManagementOperationExecution execution) => UninstallCoreAsync(
+            packageId,
+            execution.SafeCancellation,
+            execution.BeginCommit);
+
+    private async ValueTask UninstallCoreAsync(
+        string packageId,
+        CancellationToken operationToken,
+        Action beginCommit)
     {
-        using var operation = LinkedOperation(cancellationToken);
-        var operationToken = operation.Token;
         await Initialized.WaitAsync(operationToken);
         await _operations.WaitAsync(operationToken);
         try
         {
-            ThrowIfStopping();
             var inspection = _installations.InspectInstalled()
                 .SingleOrDefault(item => item.Instance.PackageId == packageId);
             if (inspection is null)
                 return;
-            // Cancellation is honored before the commit begins. Once begun, finish the ordered
-            // teardown so caller cancellation or Host shutdown cannot publish a half-uninstall.
+            beginCommit();
             await StopManagedAsync(inspection.Instance.CollectorInstanceId, CancellationToken.None);
             await _installations.UninstallAsync(
                 packageId,
@@ -271,30 +347,40 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         }
     }
 
-    public async ValueTask SubmitAuthorizationAsync(
+    private ValueTask SubmitAuthorizationCoreAsync(
         Guid collectorInstanceId,
         Guid interactionId,
         IReadOnlyDictionary<string, string> values,
-        CancellationToken cancellationToken = default)
+        HostManagementOperationExecution execution) => SubmitAuthorizationCoreAsync(
+            collectorInstanceId,
+            interactionId,
+            values,
+            execution.SafeCancellation,
+            execution.BeginCommit);
+
+    private async ValueTask SubmitAuthorizationCoreAsync(
+        Guid collectorInstanceId,
+        Guid interactionId,
+        IReadOnlyDictionary<string, string> values,
+        CancellationToken operationToken,
+        Action beginCommit)
     {
-        using var operation = LinkedOperation(cancellationToken);
-        var operationToken = operation.Token;
         await Initialized.WaitAsync(operationToken);
         await _operations.WaitAsync(operationToken);
         try
         {
-            ThrowIfStopping();
             if (_runtime.ListInstances().All(item => item.CollectorInstanceId != collectorInstanceId))
                 throw new KeyNotFoundException(
                     $"Collector Instance '{collectorInstanceId:D}' is not managed by this Host.");
             var state = _runtime.GetManagedProcessRuntimeState(collectorInstanceId);
             if (state.AuthorizationChallenge?.InteractionId != interactionId)
                 throw new InvalidOperationException("Authorization interaction is no longer current.");
+            beginCommit();
             await _runtime.SubmitManagedProcessAuthorizationAsync(
                 collectorInstanceId,
                 interactionId,
                 values,
-                operationToken);
+                CancellationToken.None);
         }
         finally
         {
@@ -326,7 +412,9 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         var failures = new List<Exception>();
         try { _shutdown.Cancel(); }
         catch (Exception exception) { failures.Add(exception); }
-        // Even a throwing cancellation callback must not bypass the operation fence.
+        try { await _management.StopAsync(); }
+        catch (Exception exception) { failures.Add(exception); }
+        // A failing operation cancellation must not bypass restoration or activation cleanup.
         try
         {
             if (_restoration is not null) await _restoration;
@@ -367,6 +455,7 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         catch (Exception exception) { failures.Add(exception); }
         foreach (var entry in _managed.Values) Release(entry);
         _managed.Clear();
+        Release(_management);
         Release(_installations);
         Release(_operations);
         Release(_shutdown);
@@ -713,4 +802,5 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         public void Cancel() => Cancellation.Cancel();
         public void Dispose() => Cancellation.Dispose();
     }
+
 }

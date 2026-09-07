@@ -56,11 +56,12 @@ Marketplace subtree owns its runtime and HTTP transport; its management facade d
 Start, Stop, or Dispose and is not captured by DI as a second disposable owner. The desktop adapter
 only maps the shared read model and forwards management commands.
 
-Marketplace closes command admission, cancels accepted operations, and joins its operation fence in
-`IHostedLifecycleService.StoppingAsync`, before hosted `StopAsync` final uploads, regardless of
-registration order. Repeated stop/dispose calls join a persistent result. Cancellation callback
-failures still join active operations; subtree disposal attempts every owned resource and preserves
-errors. Borrowed Collector Runtime and package storage remain owned by the Host composition.
+Marketplace closes command admission, cancels accepted operations that have not crossed their durable
+commit fence, and joins operations already committing in `IHostedLifecycleService.StoppingAsync`,
+before hosted `StopAsync` final uploads, regardless of registration order. Repeated stop/dispose calls
+join a persistent result. Cancellation callback failures still join active operations; subtree disposal
+attempts every owned resource and preserves errors. Borrowed Collector Runtime and package storage
+remain owned by the Host composition. See ADR-052 for the management-operation ownership model.
 
 This replaces the old ordering: stop services → end UI loop → synchronously wait for disposal in
 `Program.finally` / `Host.Dispose`. That ordering deadlocked when an ExternalHost Collector cleanup

@@ -64,7 +64,22 @@ Mac Input Monitoring、Accessibility 与 Windows input hook 的原生线程、�
 
 AX 当前标题是按当前 PID 发出的独立查询，不依赖通知 session 是否已切换完成。同步的 Desktop Observation Source Stop 接口仍等待能力停止；它不是配置变更入口，未在本片扩大改造该共享采集契约。原生设备验收与退出产品策略仍保留各自门禁。
 
-Ticket 01 实现和自动验证完成，具体证据与真实 Mac/Windows 验收步骤见 `.scratch/runtime-ownership/issues/01-capability-sessions.md`。用户要求本轮完成 01 后暂停，02–05 未实施；这不代表整套运行期决定或退出产品策略已全部完成。
+Ticket 01 实现和自动验证完成，具体证据与真实 Mac/Windows 验收步骤见 `.scratch/runtime-ownership/issues/01-capability-sessions.md`。当时用户要求完成 01 后暂停；后续 Ticket 02 已按下节实施，03–05 仍未实施。这不代表整套运行期决定或退出产品策略已全部完成。
+
+## Host 管理操作实施（Ticket 02）
+
+Host Management Operation 成为 Marketplace Runtime 的进程期所有权事实。写 interface 只负责同步接纳并
+返回 OperationId，不再接受 UI/HTTP CancellationToken；调用者可以取消自己的等待或查询，但不能借此取消
+Host 已接纳的执行。显式取消在 operation owner 与 `BeginCommit` 之间线性化：下载、验证等安全阶段可取消，
+Installation/Instance 发布、Activation 替换、卸载 drain 或授权交付开始后返回不可取消并继续收尾。
+
+operation owner 是 Marketplace Runtime 内部 module，不是持久任务框架。它只保留每个 Package 当前或最近
+一条结果；同一目标的重复进行中命令共享 receipt，冲突命令拒绝。Host 停止时先关闭接纳并取消安全阶段，
+再等待提交阶段结束。Desktop presentation 从 Host snapshot 恢复进行中或失败状态；Headless 当前请求 token
+仅取消结果等待，完整的操作查询/取消 HTTP surface 仍由 Ticket 03 复用本契约实现。
+
+重启只从 Collector Runtime State 与 Installation 恢复 Instance，不恢复 operation history；未提交或已取消操作
+可重新发起。该有限承诺刻意不包含跨重启队列、断点续装、进度历史或通用调度框架。
 
 ## 尚待裁决
 

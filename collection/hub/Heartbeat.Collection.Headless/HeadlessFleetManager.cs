@@ -83,7 +83,9 @@ public sealed class HeadlessFleetManager(HeadlessFleetOptions options) : Backgro
         CancellationToken cancellationToken = default)
     {
         await _initialized.Task.WaitAsync(cancellationToken);
-        return ToResponse(await RequiredMarketplace().InstallAsync(packageId, cancellationToken));
+        var marketplace = RequiredMarketplace();
+        await marketplace.WaitForSuccessAsync(marketplace.Install(packageId), cancellationToken);
+        return ToResponse(AssertInstalled(packageId, marketplace));
     }
 
     public async ValueTask UninstallAsync(
@@ -91,7 +93,8 @@ public sealed class HeadlessFleetManager(HeadlessFleetOptions options) : Backgro
         CancellationToken cancellationToken = default)
     {
         await _initialized.Task.WaitAsync(cancellationToken);
-        await RequiredMarketplace().UninstallAsync(packageId, cancellationToken);
+        var marketplace = RequiredMarketplace();
+        await marketplace.WaitForSuccessAsync(marketplace.Uninstall(packageId), cancellationToken);
     }
 
     public async ValueTask<HeadlessCollectorStatusResponse> RetryActivationAsync(
@@ -99,7 +102,9 @@ public sealed class HeadlessFleetManager(HeadlessFleetOptions options) : Backgro
         CancellationToken cancellationToken = default)
     {
         await _initialized.Task.WaitAsync(cancellationToken);
-        return ToResponse(await RequiredMarketplace().RetryAsync(packageId, cancellationToken));
+        var marketplace = RequiredMarketplace();
+        await marketplace.WaitForSuccessAsync(marketplace.Retry(packageId), cancellationToken);
+        return ToResponse(AssertInstalled(packageId, marketplace));
     }
 
     public async ValueTask SubmitAuthorizationAsync(
@@ -109,10 +114,9 @@ public sealed class HeadlessFleetManager(HeadlessFleetOptions options) : Backgro
         CancellationToken cancellationToken)
     {
         await _initialized.Task.WaitAsync(cancellationToken);
-        await RequiredMarketplace().SubmitAuthorizationAsync(
-            collectorInstanceId,
-            interactionId,
-            values,
+        var marketplace = RequiredMarketplace();
+        await marketplace.WaitForSuccessAsync(
+            marketplace.SubmitAuthorization(collectorInstanceId, interactionId, values),
             cancellationToken);
     }
 
@@ -188,6 +192,11 @@ public sealed class HeadlessFleetManager(HeadlessFleetOptions options) : Backgro
             throw new InvalidOperationException("Headless Collector Marketplace is not initialized.");
         return _marketplaceRuntime;
     }
+
+    private static CollectorMarketplaceRuntimeItem AssertInstalled(
+        string packageId,
+        ICollectorMarketplace marketplace) => marketplace.InstalledSnapshot()
+            .Single(item => item.PackageId == packageId);
 
     private HeadlessCollectorStatusResponse ToResponse(CollectorMarketplaceRuntimeItem item)
     {

@@ -91,6 +91,10 @@ _Avoid_: Device、Subject、把无头 Hub 按某个 Collector 命名、Desktop R
 由 Hub Instance 自己拥有的用户管理边界，用于需要交互授权的 Collector Instance 设置与恢复。Dashboard 可以提供入口，但 Analytics 不代理第三方账号凭据、授权应答或管理命令。
 _Avoid_: Analytics Collector Control Plane、要求用户通过服务器终端完成账号授权
 
+**Host Management Operation（宿主管理操作）**:
+Host 接纳并仅在本次 Host 生命周期内持有的一次显式管理变更；请求或 UI 生命周期不拥有已接纳操作，重启也不恢复操作历史。
+_Avoid_: Request Task、UI Operation、跨重启持久任务
+
 **Collector Installation（采集器安装）**:
 本机完整持有某一精确 Collector Package 的事实；部分下载或未完成目录不是 Installation。安装不表示 Collector 已启用、已获授权、能够激活或正在运行，多个 Collector Instance 可以共享同一份已安装内容。
 _Avoid_: Download、Staging、Registration、Active

@@ -6,7 +6,12 @@ Status: ready-for-human
 
 2026-09-07：用户要求完成 01 后暂停。01 实现与自动验证完成，状态为 ready-for-human，待真实 Mac/Windows 原生验收；02–05 仅有任务定义，未开始实施。本轮停在 01，不继续执行其余任务。
 
-用户随后授权继续收紧 01：能力自行在后台执行转换，状态由一个写入者发布，原生 session 的停止请求与完成结果分离。本轮仍只实施 01；生产代码与测试分别统计增删，删除旧的调用线程协调和重复生命周期实现。02–05 保持未实施。
+用户随后授权继续收紧 01：能力自行在后台执行转换，状态由一个写入者发布，原生 session 的停止请求与完成结果分离。该轮只实施 01；生产代码与测试分别统计增删，删除旧的调用线程协调和重复生命周期实现。当时 02–05 尚未实施。
+
+2026-09-07：Ticket 02 实现与自动验证完成。Marketplace 写 interface 只接纳 Host Management
+Operation，UI/HTTP token 仅取消等待；Host 内部 owner 管理安全取消、提交 fence、进程期结果与停止时收尾。
+Desktop 可从 Host snapshot 恢复操作展示，重启仅恢复 Installation/Instance。03–05 尚未实施，01 的原生
+人工验收仍未执行，因此整份 PRD 保持 `ready-for-human`。
 
 ## Problem Statement
 

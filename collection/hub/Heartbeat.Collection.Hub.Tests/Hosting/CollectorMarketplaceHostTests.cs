@@ -143,14 +143,17 @@ public sealed class CollectorMarketplaceHostTests
         public IReadOnlyList<CollectorMarketplaceRuntimeItem> InstalledSnapshot() => [];
         public ValueTask<IReadOnlyList<CollectorMarketplaceRuntimeItem>> BrowseAsync(CancellationToken token = default) =>
             throw new NotSupportedException();
-        public ValueTask<CollectorMarketplaceRuntimeItem> InstallAsync(string packageId, CancellationToken token = default) =>
-            throw new NotSupportedException();
-        public ValueTask<CollectorMarketplaceRuntimeItem> RetryAsync(string packageId, CancellationToken token = default) =>
-            throw new NotSupportedException();
-        public ValueTask UninstallAsync(string packageId, CancellationToken token = default) =>
-            throw new NotSupportedException();
-        public ValueTask SubmitAuthorizationAsync(Guid instanceId, Guid interactionId,
-            IReadOnlyDictionary<string, string> values, CancellationToken token = default) =>
-            throw new NotSupportedException();
+        public HostManagementOperation Install(string packageId) => throw new NotSupportedException();
+        public HostManagementOperation Retry(string packageId) => throw new NotSupportedException();
+        public HostManagementOperation Uninstall(string packageId) => throw new NotSupportedException();
+        public HostManagementOperation SubmitAuthorization(Guid instanceId, Guid interactionId,
+            IReadOnlyDictionary<string, string> values) => throw new NotSupportedException();
+        public IReadOnlyList<HostManagementOperation> OperationsSnapshot() => [];
+        public HostManagementOperation GetOperation(Guid operationId) => throw new NotSupportedException();
+        public ValueTask<HostManagementOperation> WaitForOperationAsync(
+            Guid operationId,
+            CancellationToken token = default) => throw new NotSupportedException();
+        public HostManagementOperationCancellation CancelOperation(Guid operationId) =>
+            HostManagementOperationCancellation.NotFound;
     }
 }

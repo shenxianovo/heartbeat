@@ -11,6 +11,74 @@ namespace Heartbeat.Desktop.UI.Tests.ViewModels;
 public sealed class MainViewModelTests
 {
     [Fact]
+    public void Dispose_IsIdempotent()
+    {
+        var viewModel = TestViewModel.Create();
+
+        viewModel.Dispose();
+        viewModel.Dispose();
+    }
+
+    [Fact]
+    public async Task Dispose_FencesAHostOperationCompletionThatIsAlreadyReturning()
+    {
+        var operationId = Guid.CreateVersion7();
+        var marketplace = new FakeCollectorMarketplace(
+        [
+            new CollectorMarketplaceSnapshot(
+                "sample.package", "Sample", "Summary", "1.0.0", null,
+                CollectorMarketplacePhase.NotInstalled)
+        ])
+        {
+            IgnoreOperationWaitCancellation = true,
+            Operations =
+            [
+                new CollectorMarketplaceOperationSnapshot(
+                    operationId,
+                    "sample.package",
+                    CollectorMarketplaceOperationKind.Install,
+                    CollectorMarketplaceOperationPhase.Running)
+            ]
+        };
+        var viewModel = TestViewModel.Create(marketplace: marketplace);
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+        Assert.Equal(1, marketplace.BrowseCount);
+        marketplace.CompleteOperation(
+            operationId,
+            CollectorMarketplaceOperationPhase.Succeeded);
+        await marketplace.OperationReadyToReturn.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        viewModel.Dispose();
+        marketplace.OperationCanReturn.TrySetResult();
+        await Task.Delay(50);
+
+        Assert.Equal(1, marketplace.BrowseCount);
+    }
+
+    [Fact]
+    public async Task Dispose_CancelsTheUiWaitForAnAcceptedOperation()
+    {
+        var marketplace = new FakeCollectorMarketplace(
+        [
+            new CollectorMarketplaceSnapshot(
+                "sample.package", "Sample", "Summary", "1.0.0", null,
+                CollectorMarketplacePhase.NotInstalled)
+        ]) { PauseInstall = true };
+        var viewModel = TestViewModel.Create(marketplace: marketplace);
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+        var install = Assert.Single(viewModel.MarketplaceCollectors)
+            .InstallCommand.ExecuteAsync(null);
+        await marketplace.InstallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        viewModel.Dispose();
+
+        await install.WaitAsync(TimeSpan.FromSeconds(5));
+        await marketplace.InstallWaitCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(viewModel.CollectorMarketplaceError);
+        Assert.Equal("sample.package", marketplace.InstalledPackageId);
+    }
+
+    [Fact]
     public async Task CollectorMarketplace_PresentsCatalogItemsWithoutChangingTheSystemBuiltIn()
     {
         var marketplace = new FakeCollectorMarketplace(
@@ -87,6 +155,50 @@ public sealed class MainViewModelTests
         marketplace.InstallException = null;
         await Assert.Single(viewModel.MarketplaceCollectors).RetryCommand.ExecuteAsync(null);
         Assert.Null(viewModel.CollectorMarketplaceError);
+    }
+
+    [Fact]
+    public async Task CollectorMarketplace_ReentryRestoresTheHostOwnedOperationResult()
+    {
+        var marketplace = new FakeCollectorMarketplace(
+        [
+            new CollectorMarketplaceSnapshot(
+                "sample.package", "Sample", "Summary", "1.0.0", null,
+                CollectorMarketplacePhase.NotInstalled)
+        ]);
+        using var viewModel = TestViewModel.Create(marketplace: marketplace);
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+        var item = Assert.Single(viewModel.MarketplaceCollectors);
+        marketplace.Operations =
+        [
+            new CollectorMarketplaceOperationSnapshot(
+                Guid.CreateVersion7(),
+                "sample.package",
+                CollectorMarketplaceOperationKind.Install,
+                CollectorMarketplaceOperationPhase.Running)
+        ];
+
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+
+        Assert.True(item.IsOperationActive);
+        Assert.Equal("安装中", item.StatusText);
+
+        marketplace.CompleteOperation(
+            marketplace.Operations[0].OperationId,
+            CollectorMarketplaceOperationPhase.Failed,
+            "registry unavailable");
+        await EventuallyAsync(() => item.Detail == "registry unavailable");
+
+        Assert.False(item.IsOperationActive);
+        Assert.Equal("安装失败", item.StatusText);
+        Assert.Equal("registry unavailable", item.Detail);
+    }
+
+    private static async Task EventuallyAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!condition())
+            await Task.Delay(10, timeout.Token);
     }
 
     [Fact]

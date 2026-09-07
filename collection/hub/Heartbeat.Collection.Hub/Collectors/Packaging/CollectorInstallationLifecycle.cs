@@ -66,6 +66,14 @@ public sealed class CollectorInstallationLifecycle(
         string packageId,
         CancellationToken cancellationToken = default)
     {
+        return await InstallAsync(packageId, beginCommit: null, cancellationToken);
+    }
+
+    internal async ValueTask<InstalledCollectorPackage> InstallAsync(
+        string packageId,
+        Action? beginCommit,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
         await _operations.WaitAsync(cancellationToken);
         try
@@ -79,20 +87,25 @@ public sealed class CollectorInstallationLifecycle(
                 throw new CollectorRuntimeStateException(
                     $"Collector Package '{packageId}' has more than one default Instance.");
             if (existing.Length == 1)
+            {
+                beginCommit?.Invoke();
                 return new InstalledCollectorPackage(
                     installations.Open(ReferenceOf(existing[0])),
                     existing[0]);
+            }
 
-            var installation = await marketplace.InstallLatestAsync(packageId, cancellationToken);
-            var package = installation.Package;
-            _ = package.Manifest.Presentation
-                ?? throw new PackageValidationException("Marketplace Package does not declare presentation.");
-            var blueprint = package.Manifest.DefaultInstance
-                            ?? throw new PackageValidationException(
-                                "Marketplace Package does not declare defaultInstance.");
+            CollectorPackageInstallation? installation = null;
             CollectorInstance? instance = null;
             try
             {
+                installation = await marketplace.InstallLatestAsync(packageId, cancellationToken);
+                var package = installation.Package;
+                _ = package.Manifest.Presentation
+                    ?? throw new PackageValidationException("Marketplace Package does not declare presentation.");
+                var blueprint = package.Manifest.DefaultInstance
+                                ?? throw new PackageValidationException(
+                                    "Marketplace Package does not declare defaultInstance.");
+                beginCommit?.Invoke();
                 var subject = createSubject(ParseSubjectKind(blueprint.SubjectKind));
                 instance = runtime.CreateInstance(
                     package,
@@ -105,7 +118,7 @@ public sealed class CollectorInstallationLifecycle(
             {
                 if (instance is not null)
                     await runtime.RemoveInstanceAsync(instance.CollectorInstanceId, CancellationToken.None);
-                if (runtime.ListInstances().All(candidate =>
+                if (installation is not null && runtime.ListInstances().All(candidate =>
                         candidate.PackageId != installation.Reference.PackageId ||
                         candidate.PackageVersion != installation.Reference.Version ||
                         candidate.PackageContentHash != installation.Reference.PackageContentHash))

@@ -25,21 +25,91 @@ internal static class TestViewModel
 internal sealed class FakeCollectorMarketplace(
     IReadOnlyList<CollectorMarketplaceSnapshot>? snapshots = null) : IDesktopCollectorMarketplace
 {
+    private readonly Dictionary<Guid, TaskCompletionSource<CollectorMarketplaceOperationSnapshot>>
+        _operationWaiters = [];
+
     public IReadOnlyList<CollectorMarketplaceSnapshot> Snapshots { get; set; } = snapshots ?? [];
+    public IReadOnlyList<CollectorMarketplaceOperationSnapshot> Operations { get; set; } = [];
     public string? InstalledPackageId { get; private set; }
     public string? RetriedPackageId { get; private set; }
     public string? UninstalledPackageId { get; private set; }
     public Exception? InstallException { get; set; }
+    public bool IgnoreOperationWaitCancellation { get; set; }
+    public bool PauseInstall { get; set; }
+    public int BrowseCount { get; private set; }
+    public TaskCompletionSource OperationCanReturn { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource OperationReadyToReturn { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource InstallStarted { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource InstallWaitCancelled { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public IReadOnlyList<CollectorMarketplaceOperationSnapshot> OperationsSnapshot() => Operations;
+
+    public ValueTask<CollectorMarketplaceOperationSnapshot> WaitForOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        var operation = Operations.Single(item => item.OperationId == operationId);
+        if (!operation.IsActive)
+            return ValueTask.FromResult(operation);
+        var completion = new TaskCompletionSource<CollectorMarketplaceOperationSnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _operationWaiters[operationId] = completion;
+        if (IgnoreOperationWaitCancellation)
+            return new(WaitIgnoringCancellationAsync(operationId, completion.Task));
+        return new(completion.Task.WaitAsync(cancellationToken));
+    }
+
+    private async Task<CollectorMarketplaceOperationSnapshot> WaitIgnoringCancellationAsync(
+        Guid operationId,
+        Task<CollectorMarketplaceOperationSnapshot> completion)
+    {
+        await completion;
+        OperationReadyToReturn.TrySetResult();
+        await OperationCanReturn.Task;
+        return Operations.Single(item => item.OperationId == operationId);
+    }
+
+    public void CompleteOperation(
+        Guid operationId,
+        CollectorMarketplaceOperationPhase phase,
+        string? failure = null)
+    {
+        var operation = Operations.Single(item => item.OperationId == operationId) with
+        {
+            Phase = phase,
+            Failure = failure
+        };
+        Operations = Operations.Select(item => item.OperationId == operationId ? operation : item).ToArray();
+        _operationWaiters.GetValueOrDefault(operationId)?.TrySetResult(operation);
+    }
 
     public ValueTask<IReadOnlyList<CollectorMarketplaceSnapshot>> BrowseAsync(
-        CancellationToken cancellationToken = default) => ValueTask.FromResult(Snapshots);
+        CancellationToken cancellationToken = default)
+    {
+        BrowseCount++;
+        return ValueTask.FromResult(Snapshots);
+    }
 
-    public ValueTask InstallAsync(string packageId, CancellationToken cancellationToken = default)
+    public async ValueTask InstallAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
     {
         if (InstallException is not null)
-            return ValueTask.FromException(InstallException);
+            throw InstallException;
         InstalledPackageId = packageId;
-        return ValueTask.CompletedTask;
+        if (!PauseInstall)
+            return;
+        InstallStarted.TrySetResult();
+        try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+        catch (OperationCanceledException)
+        {
+            InstallWaitCancelled.TrySetResult();
+            throw;
+        }
     }
 
     public ValueTask RetryAsync(string packageId, CancellationToken cancellationToken = default)

@@ -73,15 +73,19 @@ public sealed class CollectorMarketplaceHost : IAsyncDisposable, IDisposable
         public IReadOnlyList<CollectorMarketplaceRuntimeItem> InstalledSnapshot() => marketplace.InstalledSnapshot();
         public ValueTask<IReadOnlyList<CollectorMarketplaceRuntimeItem>> BrowseAsync(CancellationToken token = default) =>
             marketplace.BrowseAsync(token);
-        public ValueTask<CollectorMarketplaceRuntimeItem> InstallAsync(string packageId, CancellationToken token = default) =>
-            marketplace.InstallAsync(packageId, token);
-        public ValueTask<CollectorMarketplaceRuntimeItem> RetryAsync(string packageId, CancellationToken token = default) =>
-            marketplace.RetryAsync(packageId, token);
-        public ValueTask UninstallAsync(string packageId, CancellationToken token = default) =>
-            marketplace.UninstallAsync(packageId, token);
-        public ValueTask SubmitAuthorizationAsync(Guid instanceId, Guid interactionId,
-            IReadOnlyDictionary<string, string> values, CancellationToken token = default) =>
-            marketplace.SubmitAuthorizationAsync(instanceId, interactionId, values, token);
+        public HostManagementOperation Install(string packageId) => marketplace.Install(packageId);
+        public HostManagementOperation Retry(string packageId) => marketplace.Retry(packageId);
+        public HostManagementOperation Uninstall(string packageId) => marketplace.Uninstall(packageId);
+        public HostManagementOperation SubmitAuthorization(Guid instanceId, Guid interactionId,
+            IReadOnlyDictionary<string, string> values) =>
+            marketplace.SubmitAuthorization(instanceId, interactionId, values);
+        public IReadOnlyList<HostManagementOperation> OperationsSnapshot() => marketplace.OperationsSnapshot();
+        public HostManagementOperation GetOperation(Guid operationId) => marketplace.GetOperation(operationId);
+        public ValueTask<HostManagementOperation> WaitForOperationAsync(
+            Guid operationId,
+            CancellationToken token = default) => marketplace.WaitForOperationAsync(operationId, token);
+        public HostManagementOperationCancellation CancelOperation(Guid operationId) =>
+            marketplace.CancelOperation(operationId);
     }
 }
 

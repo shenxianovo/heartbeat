@@ -25,6 +25,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IPresentationScheduler _scheduler;
     private readonly ILogFeed _logs;
     private readonly IDesktopCollectorMarketplace _collectorMarketplace;
+    private readonly object _marketplaceOperationGate = new();
+    private readonly HashSet<Guid> _trackedMarketplaceOperations = [];
+    private readonly CancellationTokenSource _marketplaceTracking = new();
+    private int _disposed;
     private DesktopSettingsSnapshot? _lastSettings;
     private bool? _lastLoginStart;
     private bool _suppressLoginStart;
@@ -346,23 +350,92 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task RefreshCollectorMarketplaceAsync()
     {
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
         var refreshVersion = Interlocked.Increment(ref _marketplaceRefreshVersion);
         try
         {
-            var snapshots = await _collectorMarketplace.BrowseAsync();
+            var operations = _collectorMarketplace.OperationsSnapshot();
+            TrackMarketplaceOperations(operations);
             _scheduler.Post(() =>
             {
-                if (refreshVersion == Volatile.Read(ref _marketplaceRefreshVersion))
+                if (refreshVersion == Volatile.Read(ref _marketplaceRefreshVersion) &&
+                    Volatile.Read(ref _disposed) == 0)
+                    ApplyMarketplaceOperations(operations);
+            });
+            var snapshots = await _collectorMarketplace.BrowseAsync();
+            var completedOperations = _collectorMarketplace.OperationsSnapshot();
+            TrackMarketplaceOperations(completedOperations);
+            _scheduler.Post(() =>
+            {
+                if (refreshVersion == Volatile.Read(ref _marketplaceRefreshVersion) &&
+                    Volatile.Read(ref _disposed) == 0)
+                {
                     ApplyMarketplaceSnapshots(snapshots);
+                    ApplyMarketplaceOperations(completedOperations);
+                }
             });
         }
         catch (Exception)
         {
             _scheduler.Post(() =>
             {
-                if (refreshVersion == Volatile.Read(ref _marketplaceRefreshVersion))
+                if (refreshVersion == Volatile.Read(ref _marketplaceRefreshVersion) &&
+                    Volatile.Read(ref _disposed) == 0)
                     CollectorMarketplaceError = "无法加载采集器";
             });
+        }
+    }
+
+    private void TrackMarketplaceOperations(
+        IReadOnlyList<CollectorMarketplaceOperationSnapshot> operations)
+    {
+        foreach (var operation in operations.Where(operation => operation.IsActive))
+        {
+            lock (_marketplaceOperationGate)
+            {
+                if (_disposed != 0)
+                    return;
+                if (!_trackedMarketplaceOperations.Add(operation.OperationId))
+                    continue;
+                _ = RefreshWhenMarketplaceOperationCompletesAsync(operation.OperationId);
+            }
+        }
+    }
+
+    private async Task RefreshWhenMarketplaceOperationCompletesAsync(Guid operationId)
+    {
+        try
+        {
+            await _collectorMarketplace.WaitForOperationAsync(
+                operationId,
+                _marketplaceTracking.Token);
+            if (Volatile.Read(ref _disposed) != 0)
+                return;
+            await RefreshCollectorMarketplaceAsync();
+        }
+        catch (OperationCanceledException) when (_marketplaceTracking.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            await RefreshCollectorMarketplaceAsync();
+        }
+        finally
+        {
+            lock (_marketplaceOperationGate)
+                _trackedMarketplaceOperations.Remove(operationId);
+        }
+    }
+
+    private void ApplyMarketplaceOperations(
+        IReadOnlyList<CollectorMarketplaceOperationSnapshot> operations)
+    {
+        var items = MarketplaceCollectors.ToDictionary(item => item.PackageId, StringComparer.Ordinal);
+        foreach (var operation in operations)
+        {
+            if (items.TryGetValue(operation.PackageId, out var item))
+                item.ApplyOperation(operation);
         }
     }
 
@@ -391,13 +464,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            await _collectorMarketplace.RetryAsync(packageId);
+            await _collectorMarketplace.RetryAsync(packageId, _marketplaceTracking.Token);
             await RefreshCollectorMarketplaceAsync();
+        }
+        catch (OperationCanceledException) when (_marketplaceTracking.IsCancellationRequested)
+        {
         }
         catch (Exception exception)
         {
             await RefreshCollectorMarketplaceAsync();
-            _scheduler.Post(() => ApplyMarketplaceOperationError(packageId, "重试失败", exception.Message));
+            _scheduler.Post(() =>
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    ApplyMarketplaceOperationError(packageId, "重试失败", exception.Message);
+            });
         }
     }
 
@@ -405,13 +485,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            await _collectorMarketplace.InstallAsync(packageId);
+            await _collectorMarketplace.InstallAsync(packageId, _marketplaceTracking.Token);
             await RefreshCollectorMarketplaceAsync();
+        }
+        catch (OperationCanceledException) when (_marketplaceTracking.IsCancellationRequested)
+        {
         }
         catch (Exception exception)
         {
             await RefreshCollectorMarketplaceAsync();
-            _scheduler.Post(() => ApplyMarketplaceFailure(packageId, "安装失败", exception.Message));
+            _scheduler.Post(() =>
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    ApplyMarketplaceFailure(packageId, "安装失败", exception.Message);
+            });
         }
     }
 
@@ -419,13 +506,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            await _collectorMarketplace.UninstallAsync(packageId);
+            await _collectorMarketplace.UninstallAsync(packageId, _marketplaceTracking.Token);
             await RefreshCollectorMarketplaceAsync();
+        }
+        catch (OperationCanceledException) when (_marketplaceTracking.IsCancellationRequested)
+        {
         }
         catch (Exception exception)
         {
             await RefreshCollectorMarketplaceAsync();
-            _scheduler.Post(() => ApplyMarketplaceOperationError(packageId, "移除失败", exception.Message));
+            _scheduler.Post(() =>
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    ApplyMarketplaceOperationError(packageId, "移除失败", exception.Message);
+            });
         }
     }
 
@@ -574,9 +668,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        lock (_marketplaceOperationGate)
+        {
+            if (_disposed != 0)
+                return;
+            _disposed = 1;
+            Interlocked.Increment(ref _marketplaceRefreshVersion);
+        }
+        _marketplaceTracking.Cancel();
         _desktopState.Changed -= HandleStateChanged;
         _updates.Changed -= HandleUpdateChanged;
         _logs.Changed -= HandleLogsChanged;
+        _marketplaceTracking.Dispose();
         GC.SuppressFinalize(this);
     }
 }

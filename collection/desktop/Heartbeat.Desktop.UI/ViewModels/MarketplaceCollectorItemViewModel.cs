@@ -35,13 +35,33 @@ public partial class MarketplaceCollectorItemViewModel : ObservableObject
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private bool _isExpanded;
     [ObservableProperty] private bool _isUninstallConfirmationVisible;
+    [ObservableProperty] private CollectorMarketplaceOperationKind? _operationKind;
+    [ObservableProperty] private CollectorMarketplaceOperationPhase? _operationPhase;
 
     public bool IsInstalled => InstalledVersion is { Length: > 0 };
     public bool IsNotInstalled => !IsInstalled;
-    public bool CanInstall => IsNotInstalled && !CanRetry;
+    public bool CanInstall => IsNotInstalled && !CanRetry && !IsOperationActive;
     public bool HasDetail => !string.IsNullOrWhiteSpace(Detail);
-    public bool CanRetry => Phase == CollectorMarketplacePhase.Failed;
-    public string StatusText => Phase switch
+    public bool CanRetry => Phase == CollectorMarketplacePhase.Failed && !IsOperationActive;
+    public bool IsOperationActive => OperationPhase is
+        CollectorMarketplaceOperationPhase.Pending or
+        CollectorMarketplaceOperationPhase.Running or
+        CollectorMarketplaceOperationPhase.Committing;
+    public string StatusText => IsOperationActive ? OperationKind switch
+    {
+        CollectorMarketplaceOperationKind.Install => "安装中",
+        CollectorMarketplaceOperationKind.Retry => "重试中",
+        CollectorMarketplaceOperationKind.Uninstall => "移除中",
+        CollectorMarketplaceOperationKind.SubmitAuthorization => "提交授权中",
+        _ => "处理中"
+    } : OperationPhase == CollectorMarketplaceOperationPhase.Failed ? OperationKind switch
+    {
+        CollectorMarketplaceOperationKind.Install => "安装失败",
+        CollectorMarketplaceOperationKind.Retry => "重试失败",
+        CollectorMarketplaceOperationKind.Uninstall => "移除失败",
+        CollectorMarketplaceOperationKind.SubmitAuthorization => "授权失败",
+        _ => "操作失败"
+    } : Phase switch
     {
         CollectorMarketplacePhase.NotInstalled => "未安装",
         CollectorMarketplacePhase.Waiting => "等待连接",
@@ -88,6 +108,22 @@ public partial class MarketplaceCollectorItemViewModel : ObservableObject
         IsExpanded = true;
     }
 
+    public void ApplyOperation(CollectorMarketplaceOperationSnapshot operation)
+    {
+        if (operation.PackageId != PackageId)
+            throw new ArgumentException("Marketplace operation PackageId cannot change.", nameof(operation));
+        OperationKind = operation.Kind;
+        OperationPhase = operation.Phase;
+        IsBusy = operation.IsActive;
+        if (operation.Phase == CollectorMarketplaceOperationPhase.Failed &&
+            !string.IsNullOrWhiteSpace(operation.Failure))
+        {
+            Detail = operation.Failure;
+            IsExpanded = true;
+        }
+        NotifyDerivedProperties();
+    }
+
     [RelayCommand]
     private async Task InstallAsync()
     {
@@ -122,6 +158,8 @@ public partial class MarketplaceCollectorItemViewModel : ObservableObject
     }
 
     partial void OnPhaseChanged(CollectorMarketplacePhase value) => NotifyDerivedProperties();
+    partial void OnOperationKindChanged(CollectorMarketplaceOperationKind? value) => NotifyDerivedProperties();
+    partial void OnOperationPhaseChanged(CollectorMarketplaceOperationPhase? value) => NotifyDerivedProperties();
     partial void OnConnectedHostsChanged(int? value) => OnPropertyChanged(nameof(StatusText));
     partial void OnDetailChanged(string? value) => OnPropertyChanged(nameof(HasDetail));
     partial void OnLatestVersionChanged(string? value) => OnPropertyChanged(nameof(VersionText));
@@ -133,6 +171,7 @@ public partial class MarketplaceCollectorItemViewModel : ObservableObject
         OnPropertyChanged(nameof(IsNotInstalled));
         OnPropertyChanged(nameof(CanRetry));
         OnPropertyChanged(nameof(CanInstall));
+        OnPropertyChanged(nameof(IsOperationActive));
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(VersionText));
     }

@@ -5,6 +5,7 @@ using Heartbeat.Desktop.Mac.Configuration;
 using Heartbeat.Desktop.Mac.Hosting;
 using Heartbeat.Desktop.UI.Diagnostics;
 using Heartbeat.Desktop.UI.Logging;
+using Heartbeat.Desktop.UI.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -43,30 +44,26 @@ public static class Program
             builder.Services.AddHeartbeatMacAgent(
                 smokeRequested ? new MacAgentPaths(smoke.DataDirectory) : null);
             builder.Services.AddSingleton<MacDesktopState>();
-            using var host = builder.Build();
+            var host = builder.Build();
 
             // 发布产物的启动 smoke：只起停 host，不拉起 UI，也不认识任何具名可选 Collector。
             if (smokeRequested)
             {
-                Environment.ExitCode = DesktopStartupSmoke.Run(host, smoke);
+                using (host)
+                    Environment.ExitCode = DesktopStartupSmoke.Run(host, smoke);
                 return;
             }
 
+            using var application = new DesktopApplicationLifetime(host);
             host.StartAsync().GetAwaiter().GetResult();
             var runtime = new MacDesktopRuntime(
                 host,
+                application,
                 host.Services.GetRequiredService<MacDesktopState>(),
                 logFeed);
             App.Runtime = runtime;
 
-            try
-            {
-                BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
-            }
-            finally
-            {
-                runtime.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            }
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
         }
         finally
         {

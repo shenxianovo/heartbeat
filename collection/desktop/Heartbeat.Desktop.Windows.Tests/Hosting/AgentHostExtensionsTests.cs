@@ -6,6 +6,7 @@ using Heartbeat.Collector.System.Observations;
 using Heartbeat.Collection.Hub.Collectors.Protocol;
 using Heartbeat.Collection.Hub.Collectors.Runtime;
 using Heartbeat.Collection.Hub.Configuration;
+using Heartbeat.Collection.Hub.Hosting;
 using Heartbeat.Collection.Hub.Presence;
 using Heartbeat.Collection.Hub.Runtime;
 using Heartbeat.Collection.Hub.Ingest;
@@ -23,7 +24,7 @@ namespace Heartbeat.Desktop.Windows.Tests.Hosting;
 /// </summary>
 public class AgentHostExtensionsTests : IDisposable
 {
-    private readonly string _tempConfig = Path.Combine(Path.GetTempPath(), $"heartbeat-cfg-{Guid.NewGuid()}.json");
+    private string TempConfig => Path.Combine(_tempData, "config.json");
     private readonly string _tempRuntime = Path.Combine(Path.GetTempPath(), $"heartbeat-runtime-{Guid.NewGuid():N}");
     // 宿主的本机数据树跟着 ConfigManager 的 DataDirectory 走；配置文件直接放在临时目录根下
     // 会让状态在所有测试与历史运行之间共享，所以需要单独一个隔离的数据目录。
@@ -31,7 +32,6 @@ public class AgentHostExtensionsTests : IDisposable
 
     public void Dispose()
     {
-        if (File.Exists(_tempConfig)) File.Delete(_tempConfig);
         if (Directory.Exists(_tempRuntime)) Directory.Delete(_tempRuntime, recursive: true);
         if (Directory.Exists(_tempData)) Directory.Delete(_tempData, recursive: true);
     }
@@ -40,9 +40,10 @@ public class AgentHostExtensionsTests : IDisposable
     public void HostedServices_MonitorRegisteredLast_AfterUploadWorker()
     {
         var services = new ServiceCollection();
-        services.AddHeartbeatAgent(new ConfigManager(_tempConfig));
+        services.AddHeartbeatAgent(new ConfigManager(TempConfig));
         services.AddSingleton<IDeviceIdentity>(new FakeDeviceIdentity());
         services.AddSingleton(new SystemCollectorBindingOptions(_tempRuntime));
+        services.AddSingleton(new CollectorRuntimeStorageOptions(_tempData));
 
         using var provider = services.BuildServiceProvider();
         var hosted = provider.GetServices<IHostedService>().ToList();
@@ -68,13 +69,14 @@ public class AgentHostExtensionsTests : IDisposable
     public async Task Composition_SystemBindingActivatesAndPublishesThroughProtocol()
     {
         var services = new ServiceCollection();
-        services.AddHeartbeatAgent(new ConfigManager(_tempConfig));
+        services.AddHeartbeatAgent(new ConfigManager(TempConfig));
         var clock = new FakeClock();
         services.AddSingleton<IClock>(clock);
         services.AddSingleton<IDeviceIdentity>(new FakeDeviceIdentity());
         services.AddSingleton<IDesktopObservationSource>(new FakeObservations());
         services.AddSingleton<IInputActivitySignal>(new FakeInputActivitySignal());
         services.AddSingleton(new SystemCollectorBindingOptions(_tempRuntime));
+        services.AddSingleton(new CollectorRuntimeStorageOptions(_tempData));
         using var provider = services.BuildServiceProvider();
         var binding = Assert.Single(
             provider.GetServices<IHostedService>().OfType<SystemCollectorHostedService>());
@@ -83,7 +85,8 @@ public class AgentHostExtensionsTests : IDisposable
         clock.Advance(TimeSpan.FromSeconds(2));
         provider.GetRequiredService<AppMonitorService>().PushCurrentSnapshot();
 
-        Assert.True(File.Exists(Path.Combine(_tempRuntime, "collector-runtime.json")));
+        Assert.True(File.Exists(Path.Combine(_tempData, "collector-runtime.json")));
+        Assert.False(File.Exists(Path.Combine(_tempRuntime, "collector-runtime.json")));
         var status = provider.GetRequiredService<ICollectionStatus>();
         Assert.Equal("win:code", status.CurrentActivity!.AppIdentityKey);
         await WaitUntilAsync(() => status.SourceLastSeen.ContainsKey("system"));
@@ -102,6 +105,7 @@ public class AgentHostExtensionsTests : IDisposable
         services.AddHeartbeatAgent(new ConfigManager(Path.Combine(_tempData, "config.json")));
         services.AddSingleton<IDeviceIdentity>(new FakeDeviceIdentity());
         services.AddSingleton(new SystemCollectorBindingOptions(_tempRuntime));
+        services.AddSingleton(new CollectorRuntimeStorageOptions(_tempData));
 
         Assert.DoesNotContain(
             services,

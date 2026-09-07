@@ -1,7 +1,4 @@
 using Heartbeat.Collection.Hub.Collectors.Packages;
-using Heartbeat.Collection.Hub.Collectors.Runtime;
-using Heartbeat.Collection.Hub.Segments;
-using Heartbeat.Core.DTOs.Segments;
 using Heartbeat.Desktop.UI.Presentation;
 
 namespace Heartbeat.Desktop.UI.Tests.Presentation;
@@ -9,34 +6,35 @@ namespace Heartbeat.Desktop.UI.Tests.Presentation;
 public sealed class DesktopCollectorMarketplaceTests
 {
     [Fact]
-    public async Task Open_DoesNotRequireMachineIdentityUntilAnInstallNeedsItsBlueprint()
+    public async Task Browse_MapsHostReadModelWithoutOwningTheRuntime()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"heartbeat-desktop-marketplace-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            using var runtime = CollectorRuntime.Open(
-                Path.Combine(root, "runtime.json"),
-                new NullSegmentSink());
-            var installations = new CollectorPackageInstallations(Path.Combine(root, "packages"));
+        var marketplace = new DesktopCollectorMarketplace(new Management());
 
-            await using var marketplace = DesktopCollectorMarketplace.Open(
-                "test",
-                "identity-not-ready",
-                installations,
-                runtime,
-                new Uri("https://registry.example.invalid/v1/"));
+        var snapshot = Assert.Single(await marketplace.BrowseAsync());
 
-            Assert.NotNull(marketplace);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        Assert.Equal("reference", snapshot.PackageId);
+        Assert.Equal(CollectorMarketplacePhase.Waiting, snapshot.Phase);
+        Assert.Equal(2, snapshot.ConnectedHosts);
+        Assert.False((object)marketplace is IAsyncDisposable);
+        Assert.False((object)marketplace is IDisposable);
     }
 
-    private sealed class NullSegmentSink : ISegmentSink
+    private sealed class Management : ICollectorMarketplace
     {
-        public void Push(List<ActivitySegmentItem> snapshots) { }
+        public IReadOnlyList<CollectorMarketplaceRuntimeItem> InstalledSnapshot() => [];
+        public ValueTask<IReadOnlyList<CollectorMarketplaceRuntimeItem>> BrowseAsync(CancellationToken token = default) =>
+            ValueTask.FromResult<IReadOnlyList<CollectorMarketplaceRuntimeItem>>([
+                new("reference", "Reference", "Example", "1.0.0", "1.0.0", Guid.NewGuid(),
+                    CollectorMarketplaceRuntimePhase.WaitingForExternalHost, ConnectedExternalHosts: 2)
+            ]);
+        public ValueTask<CollectorMarketplaceRuntimeItem> InstallAsync(string packageId, CancellationToken token = default) =>
+            throw new NotSupportedException();
+        public ValueTask<CollectorMarketplaceRuntimeItem> RetryAsync(string packageId, CancellationToken token = default) =>
+            throw new NotSupportedException();
+        public ValueTask UninstallAsync(string packageId, CancellationToken token = default) =>
+            throw new NotSupportedException();
+        public ValueTask SubmitAuthorizationAsync(Guid instanceId, Guid interactionId,
+            IReadOnlyDictionary<string, string> values, CancellationToken token = default) =>
+            throw new NotSupportedException();
     }
 }

@@ -81,6 +81,42 @@ public sealed class CollectorMarketplaceRuntimeTests : IDisposable
         Assert.True(source.BrowseCancelled.Task.IsCompletedSuccessfully);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_JoinsInFlightOperationsAndRetainsTheResult(bool cancellationFails)
+    {
+        var installations = new CollectorPackageInstallations(Path.Combine(_root, "packages"));
+        var source = new BlockingPackageSource { PauseCancellation = true, CancellationFails = cancellationFails };
+        using var runtime = CollectorRuntime.Open(
+            Path.Combine(_root, "runtime.json"), new SegmentIngestService(new FixedClock()));
+        var marketplace = new CollectorMarketplaceRuntime(
+            source, installations, runtime, CurrentTarget(), new RecordingHostAdapter());
+        marketplace.Start();
+        await marketplace.Initialized;
+        var browse = marketplace.BrowseAsync().AsTask();
+        await source.BrowseStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var first = marketplace.DisposeAsync().AsTask();
+        await source.BrowseCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = marketplace.DisposeAsync().AsTask();
+        try
+        {
+            Assert.False(first.IsCompleted);
+            Assert.Same(first, second);
+        }
+        finally
+        {
+            source.AllowReturn.TrySetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => browse);
+            if (cancellationFails)
+                await Assert.ThrowsAnyAsync<Exception>(() => first);
+            else
+                await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.Same(first, marketplace.DisposeAsync().AsTask());
+        Assert.Throws<ObjectDisposedException>(marketplace.Start);
+    }
+
     [Fact]
     public async Task ExternalHostPackage_StatusComesFromTheGenericRuntimeInsteadOfAProductAdapter()
     {
@@ -325,6 +361,9 @@ public sealed class CollectorMarketplaceRuntimeTests : IDisposable
 
     private sealed class BlockingPackageSource : ICollectorPackageMarketplace
     {
+        public bool PauseCancellation { get; init; }
+        public bool CancellationFails { get; init; }
+        public TaskCompletionSource AllowReturn { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource BrowseStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource BrowseCancelled { get; } =
@@ -333,6 +372,10 @@ public sealed class CollectorMarketplaceRuntimeTests : IDisposable
         public async ValueTask<IReadOnlyList<CollectorCatalogItem>> BrowseAsync(
             CancellationToken cancellationToken = default)
         {
+            using var registration = cancellationToken.Register(() =>
+            {
+                if (CancellationFails) throw new IOException("cancellation callback failed");
+            });
             BrowseStarted.TrySetResult();
             try
             {
@@ -342,6 +385,7 @@ public sealed class CollectorMarketplaceRuntimeTests : IDisposable
             catch (OperationCanceledException)
             {
                 BrowseCancelled.TrySetResult();
+                if (PauseCancellation) await AllowReturn.Task;
                 throw;
             }
         }

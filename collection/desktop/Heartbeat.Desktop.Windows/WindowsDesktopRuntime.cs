@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using Heartbeat.Desktop.Windows.Configuration;
 using Heartbeat.Desktop.Windows.Utils;
 using Heartbeat.Desktop.UI.Logging;
+using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Desktop.UI.Presentation;
 using Heartbeat.Desktop.UI.Views;
 using Heartbeat.Desktop.Updater.Velopack;
@@ -13,33 +14,26 @@ using Heartbeat.Collection.Hub.Http;
 using Heartbeat.Collection.Hub.Presence;
 using Heartbeat.Collection.Hub.Upload;
 using Heartbeat.Desktop.Windows.Services;
-using Heartbeat.Collection.Hub.Collectors.Runtime;
 using Heartbeat.Collection.Hub.Collectors.Packages;
-using Heartbeat.Collection.Hub.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Serilog;
 
 namespace Heartbeat.Desktop.Windows;
 
-public sealed class WindowsDesktopRuntime : IWindowController, IAsyncDisposable
+public sealed class WindowsDesktopRuntime : IWindowController, IDesktopApplicationParticipant
 {
-    private readonly IHost _host;
-    private readonly SingleInstanceGuard _guard;
-    private int _stopped;
-    private int _quitting;
+    private readonly DesktopApplicationLifetime _application;
     private IClassicDesktopStyleApplicationLifetime? _lifetime;
     private MainWindow? _window;
     private TrayIcon? _trayIcon;
 
     public WindowsDesktopRuntime(
         IHost host,
-        SingleInstanceGuard guard,
+        DesktopApplicationLifetime application,
         ConfigManager config,
         RingBufferSink logFeed)
     {
-        _host = host;
-        _guard = guard;
+        _application = application;
         LogFeed = logFeed;
         DesktopState = new WindowsDesktopState(
             config,
@@ -47,16 +41,13 @@ public sealed class WindowsDesktopRuntime : IWindowController, IAsyncDisposable
             host.Services.GetRequiredService<IAutoStartService>(),
             host.Services.GetRequiredService<IClientCompatibilityStatus>(),
             host.Services.GetRequiredService<IUploadStatus>());
-        CollectorMarketplace = DesktopCollectorMarketplace.Open(
-            "windows",
-            host.Services.GetRequiredService<IDeviceIdentity>().HardwareId,
-            host.Services.GetRequiredService<CollectorPackageInstallations>(),
-            host.Services.GetRequiredService<CollectorRuntime>());
-        CollectorMarketplace.StartInstalledCollectors();
+        CollectorMarketplace = new DesktopCollectorMarketplace(
+            host.Services.GetRequiredService<ICollectorMarketplace>());
         var channel = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
             ? "win-arm64"
             : "win-x64";
         Updates = new VelopackUpdateController(channel, PrepareForUpdateAsync);
+        _application.Attach(this);
         Updates.Start();
     }
 
@@ -64,7 +55,7 @@ public sealed class WindowsDesktopRuntime : IWindowController, IAsyncDisposable
     public VelopackUpdateController Updates { get; }
     public RingBufferSink LogFeed { get; }
     public DesktopCollectorMarketplace CollectorMarketplace { get; }
-    public bool IsShutdownPrepared => Volatile.Read(ref _stopped) != 0;
+    public bool IsShutdownPrepared => _application.IsShutdownPrepared;
 
     public void Attach(
         IClassicDesktopStyleApplicationLifetime lifetime,
@@ -93,48 +84,31 @@ public sealed class WindowsDesktopRuntime : IWindowController, IAsyncDisposable
             await clipboard.SetTextAsync(text);
     });
 
-    public async Task QuitAsync()
+    public Task QuitAsync() => _application.RequestExitAsync(DesktopExitReason.Quit);
+
+    private Task PrepareForUpdateAsync() =>
+        _application.RequestExitAsync(DesktopExitReason.UpdateRestart);
+
+    Task IDesktopApplicationParticipant.PrepareToExitAsync(DesktopExitReason? reason)
     {
-        if (Interlocked.Exchange(ref _quitting, 1) != 0) return;
-        await StopAgentAsync();
-
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            if (_window != null) _window.AllowClose = true;
-            _trayIcon?.Dispose();
-        });
-        _guard.Dispose();
-
-        Updates.ScheduleOnExitIfReady();
-        await Dispatcher.UIThread.InvokeAsync(() => _lifetime?.Shutdown());
+        if (reason == DesktopExitReason.Quit) Updates.ScheduleOnExitIfReady();
+        return Task.CompletedTask;
     }
 
-    private async Task PrepareForUpdateAsync()
+    ValueTask IAsyncDisposable.DisposeAsync()
     {
-        await StopAgentAsync();
+        Updates.Dispose();
+        DesktopState.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    async Task IDesktopApplicationParticipant.ExitAsync(DesktopExitReason reason)
+    {
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (_window != null) _window.AllowClose = true;
             _trayIcon?.Dispose();
             _lifetime?.Shutdown();
         });
-        _guard.Dispose();
-    }
-
-    private async Task StopAgentAsync()
-    {
-        if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
-        Log.Information("正在停止 Heartbeat Agent...");
-        await CollectorMarketplace.StopAsync();
-        await _host.StopAsync();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await StopAgentAsync();
-        await CollectorMarketplace.DisposeAsync();
-        Updates.Dispose();
-        DesktopState.Dispose();
-        _trayIcon?.Dispose();
     }
 }

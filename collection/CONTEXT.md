@@ -253,6 +253,11 @@ _Avoid_: Build, Package
 应用检测到新版本后，下载增量/完整包并在用户确认重启后应用的过程。生命周期为 Idle → UpdateAvailable → Downloading → ReadyToApply，下载失败退回 UpdateAvailable（携带失败原因）；**只有 ReadyToApply 的更新才允许被应用**。"检查"是瞬时动作而非状态，结果三分：UpToDate / UpdateFound / CheckFailed——检查失败 ≠ 已是最新。
 _Avoid_: Upgrade, Patch; Pending Update（旧名，混淆了"发现"与"已下载"）
 
+**Desktop Exit Intent（桌面退出意图）**:
+用户请求桌面 Agent 结束本次运行的目的：普通退出或更新重启。首次接受后固定；重复请求共享结果，
+冲突意图不能触发第二次最终动作。关闭设置窗口仍只是隐藏 UI，不形成退出意图。
+_Avoid_: 用窗口关闭表示 Agent 退出、把共享等待任务等同于安装器等副作用已经唯一化
+
 ## Relationships
 
 - 一个 **Release** 包含一个 **Setup** 和一个完整包

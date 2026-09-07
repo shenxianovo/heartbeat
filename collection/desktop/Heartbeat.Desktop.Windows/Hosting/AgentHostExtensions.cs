@@ -41,6 +41,8 @@ namespace Heartbeat.Desktop.Windows.Hosting
                 "Heartbeat");
             // 纯 .NET hub 运行时；无头 host 可独立调用同一入口，不会带入 desktop/UI。
             services.AddHeartbeatHub();
+            services.AddCollectorRuntime(new CollectorRuntimeStorageOptions(dataDirectory));
+            services.AddMachineCollectorMarketplace("windows");
 
             // 单实例守卫（由调用方创建并传入，Agent 负责管理生命周期）
             if (guard != null)

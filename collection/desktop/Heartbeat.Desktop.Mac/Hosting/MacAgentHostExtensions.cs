@@ -36,6 +36,8 @@ public static class MacAgentHostExtensions
         paths ??= MacAgentPaths.Default;
         services.AddSingleton(paths);
         services.AddHeartbeatHub();
+        services.AddCollectorRuntime(new CollectorRuntimeStorageOptions(paths.DataDirectory));
+        services.AddMachineCollectorMarketplace("macos");
 
         services.TryAddSingleton<MacConfigManager>();
         services.TryAddSingleton<IMacCommandRunner, MacCommandRunner>();

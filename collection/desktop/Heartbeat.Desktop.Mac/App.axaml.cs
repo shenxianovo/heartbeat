@@ -42,11 +42,11 @@ public partial class App : Application
             Runtime.Attach(desktop, window, _menuBarIcon);
             if (Environment.GetEnvironmentVariable("HEARTBEAT_SHOW_SETTINGS_ON_START") == "1")
                 Runtime.ShowSettings();
-            desktop.ShutdownRequested += (_, eventArgs) =>
+            desktop.ShutdownRequested += async (_, eventArgs) =>
             {
                 if (Runtime.IsShutdownPrepared) return;
                 eventArgs.Cancel = true;
-                _ = Runtime.QuitAsync();
+                await Runtime.QuitAsync();
             };
         }
 

@@ -3,41 +3,35 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input.Platform;
 using Avalonia.Threading;
 using Heartbeat.Desktop.UI.Logging;
+using Heartbeat.Desktop.UI.Hosting;
 using Heartbeat.Desktop.UI.Presentation;
 using Heartbeat.Desktop.UI.Views;
 using Heartbeat.Desktop.Updater.Velopack;
 using Heartbeat.Collection.Hub.Collectors.Packages;
-using Heartbeat.Collection.Hub.Collectors.Runtime;
-using Heartbeat.Collection.Hub.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Serilog;
 
 namespace Heartbeat.Desktop.Mac;
 
-public sealed class MacDesktopRuntime : IWindowController, IAsyncDisposable
+public sealed class MacDesktopRuntime : IWindowController, IDesktopApplicationParticipant
 {
     private const string ReleaseChannel = "osx-arm64-stable";
 
-    private readonly IHost _host;
-    private int _stopped;
-    private int _quitting;
+    private readonly DesktopApplicationLifetime _application;
     private IClassicDesktopStyleApplicationLifetime? _lifetime;
     private MainWindow? _window;
     private TrayIcon? _menuBarIcon;
 
-    public MacDesktopRuntime(IHost host, MacDesktopState state, RingBufferSink logFeed)
+    public MacDesktopRuntime(
+        IHost host, DesktopApplicationLifetime application, MacDesktopState state, RingBufferSink logFeed)
     {
-        _host = host;
+        _application = application;
         DesktopState = state;
         LogFeed = logFeed;
-        CollectorMarketplace = DesktopCollectorMarketplace.Open(
-            "macos",
-            host.Services.GetRequiredService<IDeviceIdentity>().HardwareId,
-            host.Services.GetRequiredService<CollectorPackageInstallations>(),
-            host.Services.GetRequiredService<CollectorRuntime>());
-        CollectorMarketplace.StartInstalledCollectors();
+        CollectorMarketplace = new DesktopCollectorMarketplace(
+            host.Services.GetRequiredService<ICollectorMarketplace>());
         Updates = new VelopackUpdateController(ReleaseChannel, PrepareForUpdateAsync);
+        _application.Attach(this);
         Updates.Start();
     }
 
@@ -45,7 +39,7 @@ public sealed class MacDesktopRuntime : IWindowController, IAsyncDisposable
     public VelopackUpdateController Updates { get; }
     public RingBufferSink LogFeed { get; }
     public DesktopCollectorMarketplace CollectorMarketplace { get; }
-    public bool IsShutdownPrepared => Volatile.Read(ref _stopped) != 0;
+    public bool IsShutdownPrepared => _application.IsShutdownPrepared;
 
     public void Attach(
         IClassicDesktopStyleApplicationLifetime lifetime,
@@ -74,45 +68,31 @@ public sealed class MacDesktopRuntime : IWindowController, IAsyncDisposable
             await clipboard.SetTextAsync(text);
     });
 
-    public async Task QuitAsync()
-    {
-        if (Interlocked.Exchange(ref _quitting, 1) != 0) return;
-        await StopAgentAsync();
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            if (_window != null) _window.AllowClose = true;
-            _menuBarIcon?.Dispose();
-        });
+    public Task QuitAsync() => _application.RequestExitAsync(DesktopExitReason.Quit);
 
-        Updates.ScheduleOnExitIfReady();
-        await Dispatcher.UIThread.InvokeAsync(() => _lifetime?.Shutdown());
+    private Task PrepareForUpdateAsync() =>
+        _application.RequestExitAsync(DesktopExitReason.UpdateRestart);
+
+    Task IDesktopApplicationParticipant.PrepareToExitAsync(DesktopExitReason? reason)
+    {
+        if (reason == DesktopExitReason.Quit) Updates.ScheduleOnExitIfReady();
+        return Task.CompletedTask;
     }
 
-    private async Task PrepareForUpdateAsync()
+    ValueTask IAsyncDisposable.DisposeAsync()
     {
-        await StopAgentAsync();
+        Updates.Dispose();
+        // MacDesktopState is owned and disposed by the Host service provider.
+        return ValueTask.CompletedTask;
+    }
+
+    async Task IDesktopApplicationParticipant.ExitAsync(DesktopExitReason reason)
+    {
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (_window != null) _window.AllowClose = true;
             _menuBarIcon?.Dispose();
             _lifetime?.Shutdown();
         });
-    }
-
-    private async Task StopAgentAsync()
-    {
-        if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
-        Log.Information("正在停止 macOS Heartbeat Agent...");
-        await CollectorMarketplace.StopAsync();
-        await _host.StopAsync();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await StopAgentAsync();
-        await CollectorMarketplace.DisposeAsync();
-        Updates.Dispose();
-        DesktopState.Dispose();
-        _menuBarIcon?.Dispose();
     }
 }

@@ -43,10 +43,8 @@ public interface ICollectorMarketplaceHostAdapter
     ValueTask DetachAsync(CollectorInstance instance, CancellationToken cancellationToken);
 }
 
-public interface ICollectorMarketplaceRuntime : IAsyncDisposable
+public interface ICollectorMarketplace
 {
-    Task Initialized { get; }
-    void Start();
     IReadOnlyList<CollectorMarketplaceRuntimeItem> InstalledSnapshot();
     ValueTask<IReadOnlyList<CollectorMarketplaceRuntimeItem>> BrowseAsync(
         CancellationToken cancellationToken = default);
@@ -62,6 +60,12 @@ public interface ICollectorMarketplaceRuntime : IAsyncDisposable
         Guid interactionId,
         IReadOnlyDictionary<string, string> values,
         CancellationToken cancellationToken = default);
+}
+
+public interface ICollectorMarketplaceRuntime : ICollectorMarketplace, IAsyncDisposable
+{
+    Task Initialized { get; }
+    void Start();
     ValueTask StopAsync(CancellationToken cancellationToken = default);
 }
 
@@ -89,6 +93,7 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
     private readonly Dictionary<Guid, CollectorRuntimeFailure> _hostFailures = [];
     private Task? _restoration;
     private Task? _stopTask;
+    private Task? _disposeTask;
     private int _stopping;
     private int _disposed;
 
@@ -297,48 +302,87 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         }
     }
 
-    public async ValueTask StopAsync(CancellationToken cancellationToken = default)
+    public ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
+        TaskCompletionSource? completion = null;
         Task stopTask;
         lock (_lifecycleGate)
         {
             Volatile.Write(ref _stopping, 1);
-            _stopTask ??= StopCoreAsync();
+            if (_stopTask is null)
+            {
+                completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _stopTask = completion.Task;
+            }
             stopTask = _stopTask;
         }
-        await stopTask.WaitAsync(cancellationToken);
+        // Publish the shared result before cancellation invokes arbitrary operation callbacks.
+        if (completion is not null) _ = CompleteStopAsync(completion);
+        return new(stopTask.WaitAsync(cancellationToken));
     }
 
-    private async Task StopCoreAsync()
+    private async Task CompleteStopAsync(TaskCompletionSource completion)
     {
-        _shutdown.Cancel();
-        if (_restoration is not null)
-            await _restoration;
-        else
-            _initialized.TrySetResult();
-        await _operations.WaitAsync();
+        var failures = new List<Exception>();
+        try { _shutdown.Cancel(); }
+        catch (Exception exception) { failures.Add(exception); }
+        // Even a throwing cancellation callback must not bypass the operation fence.
         try
         {
-            foreach (var instanceId in _managed.Keys.ToArray())
-                await StopManagedAsync(instanceId, CancellationToken.None);
+            if (_restoration is not null) await _restoration;
+            else _initialized.TrySetResult();
+            await _operations.WaitAsync();
+            try
+            {
+                foreach (var instanceId in _managed.Keys.ToArray())
+                {
+                    try { await StopManagedAsync(instanceId, CancellationToken.None); }
+                    catch (Exception exception) { failures.Add(exception); }
+                }
+            }
+            finally { _operations.Release(); }
         }
-        finally
+        catch (Exception exception) { failures.Add(exception); }
+        Complete(completion, failures);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        TaskCompletionSource completion;
+        lock (_lifecycleGate)
         {
-            _operations.Release();
+            if (_disposeTask is not null) return new(_disposeTask);
+            Volatile.Write(ref _disposed, 1);
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _disposeTask = completion.Task;
+        }
+        _ = CompleteDisposeAsync(completion);
+        return new(completion.Task);
+    }
+
+    private async Task CompleteDisposeAsync(TaskCompletionSource completion)
+    {
+        var failures = new List<Exception>();
+        try { await StopAsync(CancellationToken.None); }
+        catch (Exception exception) { failures.Add(exception); }
+        foreach (var entry in _managed.Values) Release(entry);
+        _managed.Clear();
+        Release(_installations);
+        Release(_operations);
+        Release(_shutdown);
+        Complete(completion, failures);
+
+        void Release(IDisposable resource)
+        {
+            try { resource.Dispose(); }
+            catch (Exception exception) { failures.Add(exception); }
         }
     }
 
-    public async ValueTask DisposeAsync()
+    private static void Complete(TaskCompletionSource completion, List<Exception> failures)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
-        await StopAsync(CancellationToken.None);
-        foreach (var entry in _managed.Values)
-            entry.Dispose();
-        _managed.Clear();
-        _installations.Dispose();
-        _operations.Dispose();
-        _shutdown.Dispose();
+        if (failures.Count == 0) completion.SetResult();
+        else completion.SetException(failures.Count == 1 ? failures[0] : new AggregateException(failures));
     }
 
     private async Task RestoreAsync(CancellationToken cancellationToken)

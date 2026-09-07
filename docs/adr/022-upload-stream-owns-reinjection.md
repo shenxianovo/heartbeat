@@ -29,7 +29,15 @@ ADR-020 §5 的上传通道契约是"送达，或落离线缓存，否则原样�
 
 流绑定自己的源。`DrainAsync()` 一轮 = 先重传离线缓存（成功清空，失败保留，ADR-008），再取 fresh 出网——送达，或落离线缓存，否则**流自己重注入源**。调用方从"必须记得重注入"（跨文件义务）变为"调用即安全"。`UploadAsync`/`UploadCachedAsync` 降为私有——接口收窄到一个方法。
 
-`DrainAsync` 返回本轮从源取走的 fresh 批（无论结局，调用方只读）：图标挂点从中提 AppName，行为与 ADR-020 §6 一致（上传失败也触发）。图标不迁入 hub 事件——网络 I/O 不进 `Accept` 的订阅链。
+`DrainAsync` 返回 `UploadDrainResult`：保留本轮 fresh 批供图标挂点使用，同时分别报告 Analytics 已接收数量与
+owner 的交付余量。余量包括本地 cache、dead-letter、source backlog；source 自报持久保管证据，无法枚举时
+保留未知。它是这一轮结束时的快照，不能替代停产后末次交接，也不能把跨存储的副本数相加当作唯一 Fact 数量。
+`LastDrain` 保留结果供 hosted adapter 消费，执行期间为空；dead-letter 不计作 Analytics 已接收。
+
+2026-09-07 Ticket 04：426 只暂停出网，新批次继续交给本地缓存；迁移失败保留原缓存和未知余量。
+JsonFileCache 超限拒绝整个写入，不能静默裁剪未交付项；已送达收据的有界裁剪由 InputEvent owner 自己执行。
+Desktop 与 Headless 复用 `PeriodicUploadWorker` 的取消、归还和终态 drain 顺序。已关闭 Input Recording 时仍按
+既有策略不读取或上传输入缓存，adapter 不沿用此前的成功结果，报告尚无本轮交付证据。
 
 ### 3. 重注入不回滚
 

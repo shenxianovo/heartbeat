@@ -180,13 +180,12 @@ public class JsonFileCacheTests : IDisposable
     }
 
     [Fact]
-    public void Add_OverCapacity_DropsOldest()
+    public void Add_OverCapacity_RejectsWithoutDiscardingPreviouslyRetainedItems()
     {
         using var cache = NewCache(TempPath(), maxItems: 3);
-
-        cache.Add([Item(1), Item(2), Item(3), Item(4)]);
-
-        Assert.Equal([2, 3, 4], cache.Load().Select(item => item.Code));
+        cache.Add([Item(1), Item(2), Item(3)]);
+        Assert.Throws<IOException>(() => cache.Add([Item(4)]));
+        Assert.Equal([1, 2, 3], cache.Load().Select(item => item.Code));
     }
 
     private sealed record CurrentEventDto(

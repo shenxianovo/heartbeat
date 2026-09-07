@@ -82,6 +82,10 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
         var status = provider.GetRequiredService<ICollectionStatus>();
         await WaitUntilAsync(() => status.SourceLastSeen.ContainsKey("system"));
         await binding.StopAsync(CancellationToken.None);
+        var drain = Assert.IsType<InProcessCollectorDrainResult>(binding.DrainResult);
+        Assert.True(drain.LogicalResult.RemainderDurable);
+        await binding.DisposeAsync();
+        Assert.Equal(drain, binding.DrainResult);
     }
 
     /// <summary>

@@ -96,20 +96,33 @@ HTTP 直接接纳共享 Host Management Operation，并提供同一契约的结�
 HTTP 重新连接后的结果查询与取消、owner/client 拒绝和 Account 投影隔离。旧组合的双重 DI 捕获会重复释放
 Fleet 的 CancellationTokenSource，该问题已由删除重复资源 owner 路径消除。
 
+## 交付责任实施（Ticket 04）
+
+用户确认本片以解耦与可维护性为目标，选择小而可演化的结果接口，不建设完整恢复工作流。
+System hosted binding 保留 Activation，由它直接提供已有 drain result；重复停止与释放复用同一终态结果。
+Upload Stream 拥有本轮交付结果与保管证据，Host adapter 不分析异常或上传状态来推断安全。清理错误与
+持久余量分别保留；未确认数量可以为空，不能把后续空批误当成先前未知余量已恢复。
+
+Headless pipeline 在内部串行化周期上传与卸载时的交接。仍有本地数据或未知余量时拒绝删除 pipeline 数据，
+保留 Instance 供后续重试；没有增加独立归档队列或恢复 UI。历史 Segment buffer 容量淘汰仍保留行为，但其
+持久投影余量与未确认丢失会继续计入证据，不因内存清空而消失。本片不新增这类余量的在线回放/恢复机制。
+
+最终应用退出的跨子树汇总与动作仍由 Ticket 05 承接；本片提供的单轮结果不是完整退出安全结论。
+
 ## 尚待裁决
 
 - 退出期限与末次联网交付的预算；达到期限后的 UI 行为。
 - 更新安装器的提交时机，以及提交失败时能否继续原采集会话。
 - 无法确认持久化时的恢复能力、交互入口与系统强制结束场景。
 - 原生 session 长时间停止失败的用户恢复交互；实现必须保留未结束 session 的资源所有权。
-- 各子树的数据安全证据如何汇总，以及后续实施切片和验收边界。
+- 应用退出如何消费各子树的交付证据并进入最终动作（Ticket 05）。
 
 这些问题尚未确定，不从当前代码的异常形状或 Dispose 调用顺序推导产品决定。
 
 ## 已核实的设计约束
 
-- `Host.StopAsync` 正常返回不能证明数据安全：System hosted binding 没有向上返回已有的 Drain
-  Outcome，UploadWorker 会捕获末次上传错误；需要汇总显式的持久责任结果。
+- `Host.StopAsync` 正常返回不能证明数据安全。实施前 System hosted binding 丢弃已有的 Drain Outcome，
+  UploadWorker 只记录末次上传错误；Ticket 04 已提供 owner 交接结果，应用级汇总仍由 Ticket 05 承接。
 - Collector Activation 终态会 fence 旧 writer。未知余量时只保留进程或重复 Stop，并不能恢复落盘
   能力；恢复必须保留/转交本地保存责任，不能重新开放已 fence 的协议 writer（ADR-046）。
 - 固定的 Velopack 1.2.0 调度立即启动外部安装器，没有提交/撤销握手。其 XML 的“60 秒后放弃”

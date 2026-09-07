@@ -124,6 +124,24 @@ public class SegmentIngestServiceTests
     }
 
     [Fact]
+    public void DurableProjection_EvictionDoesNotEraseUndeliveredCustodyEvidence()
+    {
+        var svc = new SegmentIngestService(new FakeClock());
+        IUploadSource<ActivitySegmentItem> source = svc;
+        var evicted = Segment(start: DateTimeOffset.UtcNow.AddHours(-1));
+        svc.UpsertDurable(evicted, 1);
+        for (var index = 0; index < 20_000; index++)
+            svc.UpsertDurable(Segment(), 1);
+
+        source.Drain();
+
+        Assert.Equal(new DeliveryRemainder(1, 0), source.Remainder);
+        svc.UpsertDurable(evicted, 2);
+        source.Drain();
+        Assert.True(source.Remainder.IsEmpty);
+    }
+
+    [Fact]
     public void Reinject_Absent_Inserts()
     {
         var svc = new SegmentIngestService(new FakeClock());
@@ -132,6 +150,7 @@ public class SegmentIngestServiceTests
 
         source.Reinject([seg]);
 
+        Assert.Equal(new DeliveryRemainder(0, 1), source.Remainder);
         Assert.Same(seg, Assert.Single(svc.GetAndClearSegments()));
     }
 

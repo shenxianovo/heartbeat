@@ -25,6 +25,7 @@ public sealed class SystemCollectorHostedService(
     ICollectorDeclarationStore declarations) : IHostedService, IDisposable, IAsyncDisposable
 {
     private InProcessCollectorActivation? _activation;
+    public InProcessCollectorDrainResult? DrainResult => _activation?.DrainResult;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -39,38 +40,16 @@ public sealed class SystemCollectorHostedService(
                 declaration.Source,
                 declaration.Json,
                 declaration.Version);
-        try
-        {
-            using var config = JsonDocument.Parse("{}");
-            var subject = new SubjectReference(
-                MachineSubjectId(deviceIdentity.HardwareId),
-                SubjectKind.Machine);
-            var instance = runtime.FindInstances(package.Manifest.PackageId, subject).FirstOrDefault()
-                ?? runtime.CreateInstance(
-                    package,
-                    subject,
-                    new CollectorInstanceSpec(1, 1, config.RootElement.Clone()));
-            var activation = await runtime.ActivateInProcessAsync(
-                instance.CollectorInstanceId,
-                package,
-                collector,
-                cancellationToken);
-            _activation = activation;
-        }
-        catch
-        {
-            throw;
-        }
+        using var config = JsonDocument.Parse("{}");
+        var subject = new SubjectReference(MachineSubjectId(deviceIdentity.HardwareId), SubjectKind.Machine);
+        var instance = runtime.FindInstances(package.Manifest.PackageId, subject).FirstOrDefault()
+            ?? runtime.CreateInstance(package, subject, new CollectorInstanceSpec(1, 1, config.RootElement.Clone()));
+        _activation = await runtime.ActivateInProcessAsync(
+            instance.CollectorInstanceId, package, collector, cancellationToken);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
-    {
-        if (_activation is not null)
-        {
-            await _activation.StopAsync(cancellationToken);
-            _activation = null;
-        }
-    }
+    public Task StopAsync(CancellationToken cancellationToken) =>
+        _activation?.StopAsync(cancellationToken).AsTask() ?? Task.CompletedTask;
 
     public ValueTask DisposeAsync() => new(StopAsync(CancellationToken.None));
 

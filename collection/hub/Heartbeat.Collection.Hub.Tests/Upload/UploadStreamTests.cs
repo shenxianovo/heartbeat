@@ -29,6 +29,7 @@ public class UploadStreamTests : IDisposable
     {
         public List<ActivitySegmentItem> Items { get; } = [];
         public List<ActivitySegmentItem> Reinjected { get; } = [];
+        public DeliveryRemainder Remainder => new(0, Items.Count + Reinjected.Count);
 
         public List<ActivitySegmentItem> Drain()
         {
@@ -43,6 +44,7 @@ public class UploadStreamTests : IDisposable
     private sealed class FakeDurableSource : IDurableUploadSource<ActivitySegmentItem>
     {
         public List<ActivitySegmentItem> Items { get; } = [];
+        public DeliveryRemainder Remainder => new(Items.Count, 0);
         public List<ActivitySegmentItem> Drain() => new(Items);
         public void Reinject(List<ActivitySegmentItem> items) => Items.AddRange(items);
 
@@ -213,6 +215,56 @@ public class UploadStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task Drain_PauseInsideSplit_PreservesEarlierDeliveryEvidence()
+    {
+        var source = new FakeSource();
+        source.Items.AddRange(Enumerable.Range(0, 4).Select(_ => Segment()));
+        var singles = 0;
+        var stream = new UploadStream<ActivitySegmentItem>("segments", source,
+            (batch, _) => Task.FromResult(batch.Count > 1 ? new ApiResult(false, 413) :
+                ++singles == 1 ? ApiResult.Ok : new ApiResult(false, 426)), new FakeCache());
+
+        var result = await stream.DrainAsync();
+
+        Assert.Equal(1, result.DeliveredCount);
+        Assert.Equal(new DeliveryRemainder(3, 0), result.Remainder);
+    }
+
+    [Fact]
+    public async Task Drain_PartialRejection_DistinguishesAnalyticsDeliveryFromLocalCustody()
+    {
+        var source = new FakeSource();
+        source.Items.AddRange([Segment(), Segment()]);
+        var sends = 0;
+        var stream = new UploadStream<ActivitySegmentItem>("segments", source,
+            (_, _) => Task.FromResult(++sends == 2 ? ApiResult.Ok : new ApiResult(false, 422, "invalid")),
+            new FakeCache(), deadLetterStore: new JsonDeadLetterStore<ActivitySegmentItem>(
+                Path.Combine(_tempDirectory, "rejected.json")));
+
+        var result = await stream.DrainAsync();
+
+        Assert.Equal(1, result.DeliveredCount);
+        Assert.Equal(1, result.Remainder.RetainedLocally);
+        Assert.Equal(0, result.Remainder.Unconfirmed);
+        Assert.Same(result, stream.LastDrain);
+    }
+
+    [Fact]
+    public async Task Drain_WhenTransportThrows_PreservesTheFreshBatch()
+    {
+        var source = new FakeSource();
+        var item = Segment();
+        source.Items.Add(item);
+        var cache = new FakeCache();
+        var stream = new UploadStream<ActivitySegmentItem>("segments", source,
+            (_, _) => throw new IOException("transport failed before returning a response"), cache);
+
+        await stream.DrainAsync();
+
+        Assert.Equal(item.Id, Assert.Single(cache.Items).Id);
+    }
+
+    [Fact]
     public async Task Drain_Success_SendsFresh_EmptiesSource_DoesNotCache()
     {
         var (stream, source, cache, handler) = Build(HttpStatusCode.OK);
@@ -220,7 +272,7 @@ public class UploadStreamTests : IDisposable
 
         var drained = await stream.DrainAsync();
 
-        Assert.Equal(2, drained.Count);       // 返回本轮取走的 fresh 批（图标挂点用）
+        Assert.Equal(2, drained.FreshItems.Count);       // 返回本轮取走的 fresh 批（图标挂点用）
         Assert.Empty(source.Items);
         Assert.Empty(source.Reinjected);
         Assert.Empty(cache.Items);
@@ -236,7 +288,7 @@ public class UploadStreamTests : IDisposable
 
         var drained = await stream.DrainAsync();
 
-        Assert.Equal(2, drained.Count);
+        Assert.Equal(2, drained.FreshItems.Count);
         Assert.Equal(2, cache.Items.Count);
         Assert.Empty(source.Reinjected);
     }
@@ -278,7 +330,7 @@ public class UploadStreamTests : IDisposable
 
         var drained = await stream.DrainAsync();
 
-        Assert.Equal(2, drained.Count);
+        Assert.Equal(2, drained.FreshItems.Count);
         Assert.Equal(2, source.Reinjected.Count);
         Assert.Same(a, source.Reinjected[0]); // 原样退回，不复制不丢字段
         Assert.Same(b, source.Reinjected[1]);
@@ -291,7 +343,7 @@ public class UploadStreamTests : IDisposable
 
         var drained = await stream.DrainAsync();
 
-        Assert.Empty(drained);
+        Assert.Empty(drained.FreshItems);
         Assert.Empty(handler.Requests);
     }
 
@@ -602,14 +654,16 @@ public class UploadStreamTests : IDisposable
 
         await stream.DrainAsync();
         source.Items.Add(Segment());
-        await stream.DrainAsync();
+        var paused = await stream.DrainAsync();
 
         Assert.Equal(UploadStreamState.UpdateRequired, stream.Status.State);
         Assert.Equal(UploadStreamState.UpdateRequired, registry.Snapshot["segments"].State);
         Assert.Contains("install 2.0", stream.Status.Message);
         Assert.Single(handler.RequestBodies);
-        Assert.Single(source.Items);
-        Assert.Equal(queued.Id, Assert.Single(RealCache(cachePath).Load()).Id);
+        Assert.Empty(source.Items);
+        Assert.Equal(2, paused.Remainder.RetainedLocally);
+        Assert.True(paused.Remainder.IsDurable);
+        Assert.Contains(RealCache(cachePath).Load(), item => item.Id == queued.Id);
 
         var recovered = new ControlledHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.OK));
         var restarted = RealStream(new FakeSource(), cachePath, cachePath + ".dead-letter.json", recovered);

@@ -58,6 +58,8 @@ public sealed class UploadStream<T>
 
     public UploadStreamStatus Status { get; private set; }
     public event Action<UploadStreamStatus>? StatusChanged;
+    public UploadDrainResult<T>? LastDrain { get; private set; }
+    private int? _unconfirmed = 0;
 
     /// <summary>
     /// Clears this stream's in-process 426 pause for diagnostics. It intentionally does not clear
@@ -70,28 +72,55 @@ public sealed class UploadStream<T>
         SetStatus(ReadyStatus());
     }
 
-    public async Task<List<T>> DrainAsync(CancellationToken cancellationToken = default)
+    public async Task<UploadDrainResult<T>> DrainAsync(CancellationToken cancellationToken = default)
     {
-        if (Status.State is UploadStreamState.UpdateRequired or UploadStreamState.CacheMigrationFailed)
-            return [];
+        LastDrain = null;
+        List<T> items = [];
+        var delivered = 0;
+        Exception? error = null;
+        try
+        {
+            var paused = Status.State is UploadStreamState.UpdateRequired or UploadStreamState.CacheMigrationFailed;
+            if (!paused)
+            {
+                var cached = await UploadCachedAsync(cancellationToken);
+                delivered += cached.DeliveredCount;
+                paused = cached.Paused;
+            }
 
-        var cachedResult = await UploadCachedAsync(cancellationToken);
-        if (cachedResult.Paused) return [];
+            if (Status.State != UploadStreamState.CacheMigrationFailed)
+            {
+                items = _source.Drain();
+                var result = paused ? BatchResult<T>.Pause(items) : await ProcessBatchAsync(items, cancellationToken);
+                delivered += result.DeliveredCount;
+                if (items.Count > 0)
+                {
+                    if (_source is IDurableUploadSource<T> durableSource)
+                        CompleteDurableSourceDrain(durableSource, items, result);
+                    else if (result.RetryItems.Count > 0)
+                        PreserveFreshRetryItems(result.RetryItems);
+                    else
+                        RecoverTransientStatus(UploadStreamState.CacheWriteFailed, UploadStreamState.DeadLetterWriteFailed);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            error = exception;
+            // A source/retention failure has no receipt. Keep that uncertainty across later drains.
+            _unconfirmed = null;
+            Log.Warning(exception, "{Label}交付责任未确认", _label);
+        }
+        var remainder = ReadRemainder(() => _source.Remainder) +
+            ReadRemainder(() => new DeliveryRemainder(_cache.Load().Count + (_deadLetterStore?.Count ?? 0), 0)) +
+            new DeliveryRemainder(0, _unconfirmed);
+        return LastDrain = new(items, delivered, remainder, error);
+    }
 
-        var items = _source.Drain();
-        if (items.Count == 0) return items;
-
-        Log.Information("正在上传 {Count} 条{Label}...", items.Count, _label);
-        var result = await ProcessBatchAsync(items, cancellationToken);
-        if (_source is IDurableUploadSource<T> durableSource)
-            CompleteDurableSourceDrain(durableSource, items, result);
-        else if (result.RetryItems.Count > 0)
-            PreserveFreshRetryItems(result.RetryItems);
-        else if (!result.Paused)
-            RecoverTransientStatus(
-                UploadStreamState.CacheWriteFailed,
-                UploadStreamState.DeadLetterWriteFailed);
-        return items;
+    private static DeliveryRemainder ReadRemainder(Func<DeliveryRemainder> read)
+    {
+        try { return read(); }
+        catch { return DeliveryRemainder.Unknown; }
     }
 
     private void CompleteDurableSourceDrain(
@@ -188,11 +217,12 @@ public sealed class UploadStream<T>
         {
             response = await _send(items, cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception exception)
         {
+            Log.Warning(exception, "{Label}传输未确认，保留本批重试", _label);
             return BatchResult<T>.Retry(items);
         }
-        if (response.Success) return BatchResult<T>.Complete;
+        if (response.Success) return new([], false, items.Count);
         if (cancellationToken.IsCancellationRequested) return BatchResult<T>.Retry(items);
 
         if (response.StatusCode == 426)
@@ -235,12 +265,13 @@ public sealed class UploadStream<T>
         var midpoint = items.Count / 2;
         var left = await ProcessBatchAsync(items.GetRange(0, midpoint), cancellationToken);
         if (left.Paused)
-            return BatchResult<T>.Pause(left.RetryItems.Concat(items.Skip(midpoint)).ToList());
+            return new(left.RetryItems.Concat(items.Skip(midpoint)).ToList(), true, left.DeliveredCount);
 
         var right = await ProcessBatchAsync(items.GetRange(midpoint, items.Count - midpoint), cancellationToken);
         return new BatchResult<T>(
             left.RetryItems.Concat(right.RetryItems).ToList(),
-            right.Paused);
+            right.Paused,
+            left.DeliveredCount + right.DeliveredCount);
     }
 
     private BatchResult<T> DeadLetterOrRetry(T item, ApiResult rejection)
@@ -310,7 +341,7 @@ public sealed class UploadStream<T>
         DeadLetterPath = _deadLetterStore?.Location
     };
 
-    private sealed record BatchResult<TItem>(List<TItem> RetryItems, bool Paused)
+    private sealed record BatchResult<TItem>(List<TItem> RetryItems, bool Paused, int DeliveredCount = 0)
     {
         public static BatchResult<TItem> Complete { get; } = new([], false);
         public static BatchResult<TItem> Retry(List<TItem> items) => new(new(items), false);

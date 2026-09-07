@@ -205,6 +205,20 @@ public class UploadWorkerTests : IDisposable
     }
 
     [Fact]
+    public async Task DrainOnce_DisabledInputDoesNotReusePriorDeliveryEvidence()
+    {
+        var (worker, _, inputSource, _, _, recording) = Build();
+        await worker.DrainOnceAsync();
+        recording.Set(false);
+        inputSource.Items.Add(Event());
+
+        await worker.DrainOnceAsync();
+
+        Assert.Null(worker.InputDrain);
+        Assert.Single(inputSource.Items);
+    }
+
+    [Fact]
     public async Task DrainOnce_WhenRecordingDisabled_DoesNotReadCacheOrDrainInputSource()
     {
         var (worker, segSource, inputSource, _, inputCache, _) = Build(recordingEnabled: false);

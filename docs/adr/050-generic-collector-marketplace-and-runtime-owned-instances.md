@@ -35,6 +35,9 @@ Hub 重启只从精确 Installation 恢复，不访问 Web。手写 `instances`�
 
 ## Consequences
 
+2026-09-07 Ticket 04：Headless pipeline 仍有上传余量或未知责任时，卸载失败并保留 Instance 供重试；
+只有它的交付余量已清空才删除 pipeline 数据。清理失败不能释放仍需重试的 owner，不增加独立归档队列。
+
 - ✅ Hub、Desktop 与 Frontend 不含 VRChat/Browser 分支；增加 Collector 只改变其 Package、Release 与 Registry
   数据。
 - ✅ 用户只看到 Catalog 条目和“安装”，不接触 URL、GUID 或 JSON config。

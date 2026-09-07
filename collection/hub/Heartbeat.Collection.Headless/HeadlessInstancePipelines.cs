@@ -36,6 +36,13 @@ internal sealed class HeadlessInstancePipelines(
 {
     private readonly object _gate = new();
     private readonly Dictionary<Guid, Pipeline> _pipelines = [];
+    private readonly SemaphoreSlim _uploads = new(1, 1);
+    private IReadOnlyDictionary<Guid, UploadDrainResult<ActivitySegmentItem>?>? _terminalUploads;
+
+    public IReadOnlyDictionary<Guid, UploadDrainResult<ActivitySegmentItem>?> UploadResults
+    {
+        get { lock (_gate) return _terminalUploads ?? _pipelines.ToDictionary(pair => pair.Key, pair => pair.Value.LastDrain); }
+    }
 
     public void Add(Guid collectorInstanceId, SubjectReference subject, string displayName)
     {
@@ -85,28 +92,39 @@ internal sealed class HeadlessInstancePipelines(
 
     public async Task RemoveAsync(Guid collectorInstanceId)
     {
-        Pipeline pipeline;
-        lock (_gate)
+        await _uploads.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (!_pipelines.Remove(collectorInstanceId, out pipeline!))
-                return;
+            Pipeline? pipeline;
+            lock (_gate) _pipelines.TryGetValue(collectorInstanceId, out pipeline);
+            if (pipeline is null) return;
+            var result = await pipeline.DrainAsync(CancellationToken.None).ConfigureAwait(false);
+            if (!result.Remainder.IsEmpty)
+                throw new InvalidOperationException("Collector data remains undelivered; retained the Instance for retry.");
+            if (Directory.Exists(pipeline.Directory))
+                Directory.Delete(pipeline.Directory, recursive: true);
+            segmentUpload.Remove(collectorInstanceId);
+            pipeline.Dispose();
+            lock (_gate) _pipelines.Remove(collectorInstanceId);
         }
-        await pipeline.DrainAsync().ConfigureAwait(false);
-        pipeline.Dispose();
-        segmentUpload.Remove(collectorInstanceId);
-        if (Directory.Exists(pipeline.Directory))
-            Directory.Delete(pipeline.Directory, recursive: true);
+        finally { _uploads.Release(); }
     }
 
     public HeadlessCurrentSubjectActivity? CurrentActivity(Guid collectorInstanceId) =>
         Required(collectorInstanceId).CurrentActivity;
 
-    public async Task DrainAllAsync()
+    public async Task DrainAllAsync(CancellationToken cancellationToken = default)
     {
-        Pipeline[] pipelines;
-        lock (_gate) pipelines = _pipelines.Values.ToArray();
-        foreach (var pipeline in pipelines)
-            await pipeline.DrainAsync().ConfigureAwait(false);
+        // Joining local custody is mandatory even after the network budget expires.
+        await _uploads.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            Pipeline[] pipelines;
+            lock (_gate) pipelines = _pipelines.Values.ToArray();
+            foreach (var pipeline in pipelines)
+                await pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally { _uploads.Release(); }
     }
 
     public void Push(List<ActivitySegmentItem> snapshots) =>
@@ -134,12 +152,15 @@ internal sealed class HeadlessInstancePipelines(
         Pipeline[] pipelines;
         lock (_gate)
         {
+            if (_terminalUploads is not null) return;
+            _terminalUploads = UploadResults;
             pipelines = _pipelines.Values.ToArray();
             _pipelines.Clear();
         }
         foreach (var pipeline in pipelines)
             pipeline.Dispose();
         segmentUpload.Dispose();
+        _uploads.Dispose();
     }
 
     private Pipeline Required(Guid collectorInstanceId)
@@ -226,8 +247,9 @@ internal sealed class HeadlessInstancePipelines(
             }
         }
 
-        public async Task DrainAsync() =>
-            _ = await upload.DrainAsync().ConfigureAwait(false);
+        public UploadDrainResult<ActivitySegmentItem>? LastDrain => upload.LastDrain;
+        public Task<UploadDrainResult<ActivitySegmentItem>> DrainAsync(CancellationToken cancellationToken) =>
+            upload.DrainAsync(cancellationToken);
 
         public void Dispose() => cache.Dispose();
 

@@ -17,6 +17,10 @@ Desktop 可从 Host snapshot 恢复操作展示，重启仅恢复 Installation/I
 组合与生命周期，删除 Fleet 的重复 owner 和管理转发；HTTP/管理页只适配已有操作契约。
 01 的原生人工验收和 04–05 仍为剩余工作，整份 PRD 保持 `ready-for-human`。
 
+2026-09-07：Ticket 04 按解耦与维护性目标完成。Upload Stream 直接报告交付与余量，System binding
+及 Headless 保留终态证据，Desktop/Headless 共用上传调度停止顺序。全量 .NET 1,182/1,182 通过，双轴
+审查已闭合。01 的原生人工验收与 05 的最终动作仍未完成，PRD 保持 `ready-for-human`。
+
 ## Problem Statement
 
 Heartbeat 的退出重构已由 00806ad 落地，但正常运行时的能力变更、原生 session、管理操作与数据交付仍依赖跨模块时序。管理界面关闭可能影响已接受操作，旧 native session 可能与新 session 共享资源。

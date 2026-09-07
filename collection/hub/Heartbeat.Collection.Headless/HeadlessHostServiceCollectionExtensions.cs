@@ -4,6 +4,7 @@ using Heartbeat.Collection.Hub.Collectors.Packages;
 using Heartbeat.Collection.Hub.Collectors.Runtime;
 using Heartbeat.Collection.Hub.Configuration;
 using Heartbeat.Collection.Hub.Hosting;
+using Heartbeat.Collection.Hub.Runtime;
 using Heartbeat.Collection.Hub.Segments;
 
 namespace Heartbeat.Collection.Headless;
@@ -81,21 +82,10 @@ public static class HeadlessHostServiceCollectionExtensions
         public event Action? Changed { add { } remove { } }
     }
 
-    private sealed class HeadlessUploadWorker(HeadlessFleetOptions options, HeadlessInstancePipelines pipelines) : BackgroundService
+    private sealed class HeadlessUploadWorker(HeadlessFleetOptions options, HeadlessInstancePipelines pipelines)
+        : PeriodicUploadWorker(() => TimeSpan.FromSeconds(options.UploadIntervalSeconds))
     {
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(options.UploadIntervalSeconds));
-            while (await timer.WaitForNextTickAsync(stoppingToken))
-                await pipelines.DrainAllAsync();
-        }
-
-        public override async Task StopAsync(CancellationToken cancellationToken)
-        {
-            // Shared Marketplace StoppingAsync has already stopped producers. Join the periodic
-            // upload before draining once more; resource disposal belongs to the Host container.
-            await base.StopAsync(cancellationToken);
-            await pipelines.DrainAllAsync();
-        }
+        public override Task DrainOnceAsync(CancellationToken cancellationToken = default) =>
+            pipelines.DrainAllAsync(cancellationToken);
     }
 }

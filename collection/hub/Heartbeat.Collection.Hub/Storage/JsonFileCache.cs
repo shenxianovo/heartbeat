@@ -49,7 +49,7 @@ public sealed class JsonFileCache<T> : ICache<T>, IDisposable
             var replacement = new List<T>(_cache.Count + items.Count);
             replacement.AddRange(_cache);
             replacement.AddRange(items);
-            TrimToCapacity(replacement);
+            EnsureCapacity(replacement);
             CommitReplacement(replacement);
         }
         finally
@@ -79,7 +79,7 @@ public sealed class JsonFileCache<T> : ICache<T>, IDisposable
         try
         {
             var replacement = new List<T>(items ?? []);
-            TrimToCapacity(replacement);
+            EnsureCapacity(replacement);
             CommitReplacement(replacement);
         }
         finally
@@ -92,7 +92,7 @@ public sealed class JsonFileCache<T> : ICache<T>, IDisposable
     {
         EnsureAvailable();
         var replacement = new List<T>(items ?? []);
-        TrimToCapacity(replacement);
+        EnsureCapacity(replacement);
         var temporaryPath = WriteAndValidateTemporary(replacement);
         return new PreparedReplacement(this, temporaryPath, _filePath, replacement);
     }
@@ -132,7 +132,6 @@ public sealed class JsonFileCache<T> : ICache<T>, IDisposable
             if (sourceVersion == _currentFormat.Version)
             {
                 _cache = ReadCurrent(root);
-                TrimToCapacity(_cache);
                 return;
             }
 
@@ -147,7 +146,6 @@ public sealed class JsonFileCache<T> : ICache<T>, IDisposable
             backupPath = backupCandidate;
 
             var migrated = migration.Migrate(root);
-            TrimToCapacity(migrated);
             WriteAndValidateReplacement(migrated);
             _cache = migrated;
             Status = new CacheFileStatus(
@@ -245,10 +243,10 @@ public sealed class JsonFileCache<T> : ICache<T>, IDisposable
         return $"{basePath}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
     }
 
-    private void TrimToCapacity(List<T> items)
+    private void EnsureCapacity(List<T> items)
     {
         if (items.Count <= _maxItems) return;
-        items.RemoveRange(0, items.Count - _maxItems);
+        throw new IOException($"Cache capacity {_maxItems} exceeded; existing data was retained.");
     }
 
     private void EnsureAvailable()

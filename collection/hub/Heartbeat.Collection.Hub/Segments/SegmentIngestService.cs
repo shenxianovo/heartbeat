@@ -23,6 +23,7 @@ namespace Heartbeat.Collection.Hub.Segments
         private readonly HashSet<Guid> _retractedSegmentIds = [];
         private readonly Dictionary<Guid, DurableProjectionWatermark> _durableWatermarks = [];
         private readonly ConditionalWeakTable<ActivitySegmentItem, DurableRevisionStamp> _durableRevisionStamps = new();
+        private readonly Dictionary<Guid, bool> _evicted = [];
 
         // ---- 集面读模型（ADR-021）：独立小锁，读写不与缓冲争用 ----
         private readonly object _statusLock = new();
@@ -85,6 +86,7 @@ namespace Heartbeat.Collection.Hub.Segments
                     current.Revision > revision)
                     return;
                 _durableWatermarks[segmentId] = new DurableProjectionWatermark(revision, Retracted: true);
+                _evicted.Remove(segmentId);
                 _retractedSegmentIds.Add(segmentId);
                 _segments.Remove(segmentId);
             }
@@ -94,6 +96,7 @@ namespace Heartbeat.Collection.Hub.Segments
         {
             lock (_lock)
             {
+                _evicted.Remove(segmentId);
                 _retractedSegmentIds.Add(segmentId);
                 _segments.Remove(segmentId);
             }
@@ -137,6 +140,19 @@ namespace Heartbeat.Collection.Hub.Segments
         /// <summary>IUploadSource adapter：出网侧的统一 drain 词汇。</summary>
         List<ActivitySegmentItem> IUploadSource<ActivitySegmentItem>.Drain() => GetAndClearSegments();
 
+        DeliveryRemainder IUploadSource<ActivitySegmentItem>.Remainder
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    var durable = _segments.Values.Count(item => _durableRevisionStamps.TryGetValue(item, out _));
+                    var evictedDurable = _evicted.Count(pair => pair.Value);
+                    return new(durable + evictedDurable, _segments.Count - durable + _evicted.Count - evictedDurable);
+                }
+            }
+        }
+
         /// <summary>
         /// IUploadSource adapter：退回批重注入（ADR-022）。legacy 项在位时保留
         /// EndTime 更晚的快照；durable Collector 投影按非序列化 Revision watermark
@@ -172,6 +188,7 @@ namespace Heartbeat.Collection.Hub.Segments
                     }
                     if (_segments.Count >= MaxBuffered && !_segments.ContainsKey(s.Id))
                         EvictOldest();
+                    _evicted.Remove(s.Id);
                     _segments[s.Id] = s;
                 }
             }
@@ -192,6 +209,7 @@ namespace Heartbeat.Collection.Hub.Segments
         private void EvictOldest()
         {
             var oldest = _segments.Values.MinBy(s => s.StartTime)!;
+            _evicted[oldest.Id] = _durableRevisionStamps.TryGetValue(oldest, out _);
             _segments.Remove(oldest.Id);
             Log.Warning("段缓冲已满（{Max} 条），丢弃最旧段 {Id}（source: {Source}）",
                 MaxBuffered, oldest.Id, oldest.Source);
@@ -209,6 +227,7 @@ namespace Heartbeat.Collection.Hub.Segments
                         continue;
                     if (_segments.Count >= MaxBuffered && !_segments.ContainsKey(snapshot.Id))
                         EvictOldest();
+                    _evicted.Remove(snapshot.Id);
                     _segments[snapshot.Id] = snapshot;
                     accepted.Add(snapshot);
                 }
@@ -238,6 +257,7 @@ namespace Heartbeat.Collection.Hub.Segments
                 _durableWatermarks[snapshot.Id] = new DurableProjectionWatermark(revision, Retracted: false);
                 _durableRevisionStamps.Remove(snapshot);
                 _durableRevisionStamps.Add(snapshot, new DurableRevisionStamp(revision));
+                _evicted.Remove(snapshot.Id);
                 _segments[snapshot.Id] = snapshot;
             }
         }

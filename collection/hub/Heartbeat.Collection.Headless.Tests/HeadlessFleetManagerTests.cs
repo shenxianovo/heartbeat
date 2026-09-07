@@ -60,6 +60,62 @@ public sealed class HeadlessFleetManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task CancelledUpload_RetainsEachInstanceAndExposesTheResult()
+    {
+        var upload = new RecordingSegmentUpload();
+        using var pipelines = new HeadlessInstancePipelines(_directory, upload);
+        var id = Guid.CreateVersion7();
+        var subject = new SubjectReference(Guid.CreateVersion7(), SubjectKind.Account);
+        pipelines.Add(id, subject, "Account");
+        pipelines.UpsertDurable(new CollectorProjectionContext(id, subject),
+            Segment("pending", DateTimeOffset.UtcNow), 1, false);
+
+        await pipelines.DrainAllAsync(new CancellationToken(canceled: true));
+
+        Assert.Empty(upload.Sent);
+        Assert.Equal(1, pipelines.UploadResults[id]!.Remainder.RetainedLocally);
+        Assert.True(pipelines.UploadResults[id]!.Remainder.IsDurable);
+        var result = pipelines.UploadResults[id];
+        pipelines.Dispose();
+        Assert.Equal(result, pipelines.UploadResults[id]);
+    }
+
+    [Fact]
+    public async Task InstanceRemoval_CleanupFailureLeavesThePipelineRetryable()
+    {
+        var upload = new RecordingSegmentUpload { FailRemoval = true };
+        using var pipelines = new HeadlessInstancePipelines(_directory, upload);
+        var id = Guid.CreateVersion7();
+        pipelines.Add(id, new SubjectReference(Guid.CreateVersion7(), SubjectKind.Account), "Account");
+
+        await Assert.ThrowsAsync<IOException>(() => pipelines.RemoveAsync(id));
+        upload.FailRemoval = false;
+        await pipelines.RemoveAsync(id);
+
+        Assert.Contains(id, upload.Removed);
+    }
+
+    [Fact]
+    public async Task InstanceRemoval_OfflineRetainsCustodyAndCanRetryAfterDelivery()
+    {
+        var upload = new RecordingSegmentUpload { Result = new ApiResult(false, 503) };
+        using var pipelines = new HeadlessInstancePipelines(_directory, upload);
+        var id = Guid.CreateVersion7();
+        var subject = new SubjectReference(Guid.CreateVersion7(), SubjectKind.Account);
+        pipelines.Add(id, subject, "Account");
+        pipelines.UpsertDurable(new CollectorProjectionContext(id, subject),
+            Segment("pending", DateTimeOffset.UtcNow), 1, false);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => pipelines.RemoveAsync(id));
+
+        Assert.Equal("pending", pipelines.CurrentActivity(id)?.Title);
+        Assert.DoesNotContain(id, upload.Removed);
+        upload.Result = ApiResult.Ok;
+        await pipelines.RemoveAsync(id);
+        Assert.Contains(id, upload.Removed);
+    }
+
+    [Fact]
     public async Task InstancePipelines_IsolateProjectionAndCanDeleteOneInstanceDataSet()
     {
         Directory.CreateDirectory(_directory);
@@ -100,6 +156,8 @@ public sealed class HeadlessFleetManagerTests : IDisposable
 
     private sealed class RecordingSegmentUpload : IHeadlessSegmentUpload
     {
+        public ApiResult Result { get; set; } = ApiResult.Ok;
+        public bool FailRemoval { get; set; }
         public HashSet<Guid> Removed { get; } = [];
         public List<(Guid InstanceId, SubjectReference Subject, string? Title)> Sent { get; } = [];
 
@@ -110,10 +168,14 @@ public sealed class HeadlessFleetManagerTests : IDisposable
             List<ActivitySegmentItem> batch, CancellationToken cancellationToken = default)
         {
             Sent.AddRange(batch.Select(item => (collectorInstanceId, subject, item.Title)));
-            return Task.FromResult(ApiResult.Ok);
+            return Task.FromResult(Result);
         }
 
-        public void Remove(Guid collectorInstanceId) => Removed.Add(collectorInstanceId);
+        public void Remove(Guid collectorInstanceId)
+        {
+            if (FailRemoval) throw new IOException("cleanup unavailable");
+            Removed.Add(collectorInstanceId);
+        }
         public void Dispose() { }
     }
 

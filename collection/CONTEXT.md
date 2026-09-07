@@ -197,6 +197,10 @@ _Avoid_: Lifecycle Driver（未区分制品交付）、假定 Hub 能直接停�
 ExternalHost Collector 对承载自身的应用所作的稳定平台身份声明，以 `AppIdentityKey` 表达。Collector 自己拥有识别知识并随 `hello` 和 Stream dimension 直接提供该值；Host 不把产品 slug 转译成平台身份。它与 External Host Identity 一起确定 Stream 身份，但不形成 Collector Instance。Backend 暂时不认识某个 Key 时仍保留真实值，不阻断事实。
 _Avoid_: App Hint、Host 侧产品映射、用显示名称或进程名代替稳定 AppIdentityKey
 
+**Delivery Remainder（交付余量）**:
+数据 owner 对尚未交付数据的保管证据，区分已确认的本地持久保管与未确认持久化的余量；不能枚举时保留未知数量。Collector 向 Hub 交接完成不等于 Analytics 已接收，资源清理结果也不替代保管证据。
+_Avoid_: 用 Stop 成功、上传状态或内存重注入推断数据安全
+
 **Upload Stream（上传流）**:
 泛化的出网流（ADR-020/022）：绑定一个出网源（IUploadSource），drain 一轮 = 先重传离线缓存，再取一个 adapter-defined 有界 fresh 批出网——送达，或落离线缓存，否则自动重注入源（重注入不回滚更新的快照）。413 会递归拆批，已成功子批不再重试；单项仍过大则保留重试。"批次不蒸发"是流自持的不变量。compact 为按流策略（segments 出网前压缩快照，input-events 不压缩）。segments 与 input-events 各一实例。
 _Avoid_: UploadService（退役的三份同构模板）、Upload Channel（ADR-022 前的旧名，彼时退回项由调用方重注入）

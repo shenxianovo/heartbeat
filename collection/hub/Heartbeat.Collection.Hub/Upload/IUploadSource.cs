@@ -8,6 +8,9 @@ namespace Heartbeat.Collection.Hub.Upload
     /// </summary>
     public interface IUploadSource<T>
     {
+        /// <summary>Owner evidence for all remaining data, including any undrained backlog.</summary>
+        DeliveryRemainder Remainder => DeliveryRemainder.Unknown;
+
         /// <summary>取走下一个出网批；adapter 可以为请求体或延迟约束保留其余 backlog。</summary>
         List<T> Drain();
 

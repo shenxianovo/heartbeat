@@ -100,6 +100,9 @@ namespace Heartbeat.Collector.System.Input
         public int Count => Volatile.Read(ref _count);
         public int Capacity => _capacity;
         public bool IsBackpressured => Count >= _capacity;
+        DeliveryRemainder IUploadSource<InputEventItem>.Remainder => _durableProjectionCache is null
+            ? new(0, Count)
+            : new(Count, 0);
 
         /// <summary>键盘按下。返回是否记录了事件（自动重复会被丢弃）。</summary>
         public bool OnKeyDown(InputKeyPosition position)
@@ -257,7 +260,7 @@ namespace Heartbeat.Collector.System.Input
                     {
                         var receipts = _deliveryReceiptCache.Load();
                         receipts.AddRange(delivered);
-                        _deliveryReceiptCache.Replace(receipts);
+                        _deliveryReceiptCache.Replace(receipts.TakeLast(_capacity).ToList());
                         _deliveredIds.Clear();
                         _deliveredIds.UnionWith(_deliveryReceiptCache.Load());
                     }

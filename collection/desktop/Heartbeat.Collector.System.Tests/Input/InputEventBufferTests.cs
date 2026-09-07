@@ -347,6 +347,7 @@ public class InputEventBufferTests
                     new InputEventUploadRequest { Events = first }).Length < 1_048_576,
                 "The bounded InputEvent upload batch must stay below the default reverse-proxy body limit.");
             source.CompleteDrain(first, []);
+            Assert.Equal(new DeliveryRemainder(3, 0), source.Remainder);
             Assert.Equal(items.Skip(5_000).Select(item => item.Id), source.Drain().Select(item => item.Id));
         }
         finally

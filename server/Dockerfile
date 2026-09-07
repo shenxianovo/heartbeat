@@ -13,9 +13,11 @@ RUN --mount=type=cache,id=heartbeat-nuget,target=/root/.nuget/packages,sharing=l
 COPY shared/ shared/
 COPY collection/contracts/segment-rotation-policy.json collection/contracts/
 COPY server/Heartbeat.Server/ server/Heartbeat.Server/
+# Cache mounts can be evicted independently of the restore layer. Let publish
+# restore missing packages before compiling, even when that layer was cached.
 RUN --mount=type=cache,id=heartbeat-nuget,target=/root/.nuget/packages,sharing=locked \
     dotnet publish server/Heartbeat.Server/Heartbeat.Server.csproj \
-    -c Release -o /app/publish --no-restore /p:UseAppHost=false
+    -c Release -o /app/publish /p:UseAppHost=false
 
 # Run Analytics on the ASP.NET runtime-only image.
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS analytics-runtime

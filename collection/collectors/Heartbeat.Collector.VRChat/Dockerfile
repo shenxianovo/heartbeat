@@ -22,9 +22,11 @@ COPY shared/Heartbeat.Core/ shared/Heartbeat.Core/
 COPY collection/protocol/Heartbeat.Collection.CollectorProtocol/ collection/protocol/Heartbeat.Collection.CollectorProtocol/
 COPY collection/collectors/Heartbeat.Collector.VRChat/ collection/collectors/Heartbeat.Collector.VRChat/
 ARG COLLECTOR_VERSION=0.1.0
+# Cache mounts can be evicted independently of the restore layer. Let publish
+# restore missing packages before compiling, even when that layer was cached.
 RUN --mount=type=cache,id=heartbeat-nuget,target=/root/.nuget/packages,sharing=locked \
     dotnet publish collection/collectors/Heartbeat.Collector.VRChat/Heartbeat.Collector.VRChat.csproj \
-        -c Release --no-restore -p:Version="$COLLECTOR_VERSION" -o /out/vrchat \
+        -c Release -p:Version="$COLLECTOR_VERSION" -o /out/vrchat \
     && /out/vrchat/Heartbeat.Collector.VRChat --create-package /out/vrchat-package
 
 # 只承载 Package 内容，供 `--output type=local` 导出到宿主目录。

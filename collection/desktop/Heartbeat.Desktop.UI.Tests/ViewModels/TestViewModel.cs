@@ -11,13 +11,48 @@ internal static class TestViewModel
         IUpdateController? updates = null,
         IWindowController? window = null,
         IPresentationScheduler? scheduler = null,
-        ILogFeed? logs = null) =>
+        ILogFeed? logs = null,
+        IDesktopCollectorMarketplace? marketplace = null) =>
         new(
             state ?? new FakeDesktopState(),
             updates ?? new FakeUpdateController(),
             window ?? new FakeWindowController(),
             scheduler ?? new ManualPresentationScheduler(),
-            logs ?? new FakeLogFeed());
+            logs ?? new FakeLogFeed(),
+            marketplace ?? new FakeCollectorMarketplace());
+}
+
+internal sealed class FakeCollectorMarketplace(
+    IReadOnlyList<CollectorMarketplaceSnapshot>? snapshots = null) : IDesktopCollectorMarketplace
+{
+    public IReadOnlyList<CollectorMarketplaceSnapshot> Snapshots { get; set; } = snapshots ?? [];
+    public string? InstalledPackageId { get; private set; }
+    public string? RetriedPackageId { get; private set; }
+    public string? UninstalledPackageId { get; private set; }
+    public Exception? InstallException { get; set; }
+
+    public ValueTask<IReadOnlyList<CollectorMarketplaceSnapshot>> BrowseAsync(
+        CancellationToken cancellationToken = default) => ValueTask.FromResult(Snapshots);
+
+    public ValueTask InstallAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        if (InstallException is not null)
+            return ValueTask.FromException(InstallException);
+        InstalledPackageId = packageId;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask RetryAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        RetriedPackageId = packageId;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UninstallAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        UninstalledPackageId = packageId;
+        return ValueTask.CompletedTask;
+    }
 }
 
 internal sealed class FakeDesktopState : IDesktopState

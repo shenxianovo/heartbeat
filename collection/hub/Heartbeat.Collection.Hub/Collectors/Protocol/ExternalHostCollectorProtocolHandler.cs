@@ -318,12 +318,18 @@ public sealed class ExternalHostCollectorProtocolHandler : IExternalHostProtocol
                     session.AppIdentityKey,
                     request.AppIdentityKey,
                     StringComparison.Ordinal)))
+            {
+                _runtime.ReportExternalHostIdentityConflict(
+                    instance.CollectorInstanceId,
+                    request.ExternalHostIdentity,
+                    request.AppIdentityKey);
                 return HelloRejected(
                     message.MessageId,
                     Error(
                         "external_host_identity_conflict",
                         "External Host Identity is already bound to a different appIdentityKey."),
                     409);
+            }
         }
         _runtime.RequireExternalHostIdentityBinding(
             instance.CollectorInstanceId,

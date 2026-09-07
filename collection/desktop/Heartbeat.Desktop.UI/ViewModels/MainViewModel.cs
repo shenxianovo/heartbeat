@@ -24,10 +24,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IWindowController _window;
     private readonly IPresentationScheduler _scheduler;
     private readonly ILogFeed _logs;
+    private readonly IDesktopCollectorMarketplace _collectorMarketplace;
     private DesktopSettingsSnapshot? _lastSettings;
     private bool? _lastLoginStart;
     private bool _suppressLoginStart;
     private bool _suppressSettings;
+    private long _marketplaceRefreshVersion;
     private readonly List<LogEntry> _allLogs = [];
 
     [ObservableProperty]
@@ -93,7 +95,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private LogEventLevel _selectedLogLevel = LogEventLevel.Information;
 
+    [ObservableProperty]
+    private string? _collectorMarketplaceError;
+
     public ObservableCollection<CollectorItemViewModel> Collectors { get; } = [];
+    public ObservableCollection<MarketplaceCollectorItemViewModel> MarketplaceCollectors { get; } = [];
     public ObservableCollection<OperationalNoticeViewModel> OperationalNotices { get; } = [];
     public bool UpdatesSupported { get; }
     public bool IsOverviewSelected => SelectedPage == MainPage.Overview;
@@ -152,13 +158,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IUpdateController updates,
         IWindowController window,
         IPresentationScheduler scheduler,
-        ILogFeed logs)
+        ILogFeed logs,
+        IDesktopCollectorMarketplace collectorMarketplace)
     {
         _desktopState = desktopState;
         _updates = updates;
         _window = window;
         _scheduler = scheduler;
         _logs = logs;
+        _collectorMarketplace = collectorMarketplace;
         UpdatesSupported = updates.IsSupported;
 
         ApplyState(desktopState.Current);
@@ -336,6 +344,104 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task RefreshCollectorMarketplaceAsync()
+    {
+        var refreshVersion = Interlocked.Increment(ref _marketplaceRefreshVersion);
+        try
+        {
+            var snapshots = await _collectorMarketplace.BrowseAsync();
+            _scheduler.Post(() =>
+            {
+                if (refreshVersion == Volatile.Read(ref _marketplaceRefreshVersion))
+                    ApplyMarketplaceSnapshots(snapshots);
+            });
+        }
+        catch (Exception)
+        {
+            _scheduler.Post(() =>
+            {
+                if (refreshVersion == Volatile.Read(ref _marketplaceRefreshVersion))
+                    CollectorMarketplaceError = "无法加载采集器";
+            });
+        }
+    }
+
+    private void ApplyMarketplaceSnapshots(IReadOnlyList<CollectorMarketplaceSnapshot> snapshots)
+    {
+        CollectorMarketplaceError = snapshots.Any(snapshot => snapshot.CatalogUnavailable)
+            ? "无法加载采集器"
+            : null;
+        var byId = MarketplaceCollectors.ToDictionary(item => item.PackageId, StringComparer.Ordinal);
+        foreach (var snapshot in snapshots)
+        {
+            if (byId.Remove(snapshot.PackageId, out var existing))
+                existing.Apply(snapshot);
+            else
+                MarketplaceCollectors.Add(new MarketplaceCollectorItemViewModel(
+                    snapshot,
+                    InstallCollectorAsync,
+                    RetryCollectorAsync,
+                    UninstallCollectorAsync));
+        }
+        foreach (var removed in byId.Values)
+            MarketplaceCollectors.Remove(removed);
+    }
+
+    private async Task RetryCollectorAsync(string packageId)
+    {
+        try
+        {
+            await _collectorMarketplace.RetryAsync(packageId);
+            await RefreshCollectorMarketplaceAsync();
+        }
+        catch (Exception exception)
+        {
+            await RefreshCollectorMarketplaceAsync();
+            _scheduler.Post(() => ApplyMarketplaceOperationError(packageId, "重试失败", exception.Message));
+        }
+    }
+
+    private async Task InstallCollectorAsync(string packageId)
+    {
+        try
+        {
+            await _collectorMarketplace.InstallAsync(packageId);
+            await RefreshCollectorMarketplaceAsync();
+        }
+        catch (Exception exception)
+        {
+            await RefreshCollectorMarketplaceAsync();
+            _scheduler.Post(() => ApplyMarketplaceFailure(packageId, "安装失败", exception.Message));
+        }
+    }
+
+    private async Task UninstallCollectorAsync(string packageId)
+    {
+        try
+        {
+            await _collectorMarketplace.UninstallAsync(packageId);
+            await RefreshCollectorMarketplaceAsync();
+        }
+        catch (Exception exception)
+        {
+            await RefreshCollectorMarketplaceAsync();
+            _scheduler.Post(() => ApplyMarketplaceOperationError(packageId, "移除失败", exception.Message));
+        }
+    }
+
+    private void ApplyMarketplaceFailure(string packageId, string title, string detail)
+    {
+        CollectorMarketplaceError = title;
+        MarketplaceCollectors.FirstOrDefault(item => item.PackageId == packageId)?.ApplyFailure(detail);
+    }
+
+    private void ApplyMarketplaceOperationError(string packageId, string title, string detail)
+    {
+        CollectorMarketplaceError = title;
+        MarketplaceCollectors.FirstOrDefault(item => item.PackageId == packageId)?.ApplyOperationDetail(detail);
+    }
+
+    [RelayCommand]
     private void ToggleDiagnostics() => IsDiagnosticsExpanded = !IsDiagnosticsExpanded;
 
     [RelayCommand]
@@ -347,6 +453,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsCollectorsSelected));
         OnPropertyChanged(nameof(IsSettingsSelected));
         OnPropertyChanged(nameof(SelectedPageIndex));
+        if (value == MainPage.Collectors)
+            _ = RefreshCollectorMarketplaceAsync();
     }
 
     partial void OnIsApiKeyVisibleChanged(bool value) => OnPropertyChanged(nameof(IsApiKeyHidden));

@@ -156,7 +156,10 @@ public sealed class CollectorPackageInstallations
         }
     }
 
-    /// <summary>删除一个精确 Installation。调用方必须先保证没有 Instance 仍引用它。</summary>
+    /// <summary>
+    /// 删除一个精确 Installation。调用方必须先停止使用它的 Activation，并负责随后删除或修复仍引用它的
+    /// durable Instance；Marketplace 卸载特意保留该 Instance 到 Runtime commit 成功，使失败保持可见、可重试。
+    /// </summary>
     public void Uninstall(CollectorPackageReference reference)
     {
         ArgumentNullException.ThrowIfNull(reference);

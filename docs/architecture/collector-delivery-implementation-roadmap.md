@@ -98,8 +98,8 @@ flowchart TB
 
 上表是目标态。Browser 一行的"默认宿主 = Desktop"现在只差 Browser 自己那一半：ADR-049 之后宿主不再持有
 Browser runtime、专属 protocol handler、安装目录或 UI 条目，而通用 ExternalHost 接入能力已按 ADR-051 实现
-（issue 06），Desktop 两个 head 都注册了通用 binding。Browser 要真正接上，还需要它自己的 Package 发布
-（issue 07）与 Desktop Marketplace 安装入口（issue 10）。
+（issue 06），Desktop 两个 head 都注册了通用 binding，通用 Marketplace 安装入口也已完成（issue 10）。
+Browser 要真正接上，只剩它自己的 Package 发布与真实 smoke（issue 07）。
 
 ## 第一条小功能：外置本地 VRChat Package
 
@@ -212,6 +212,10 @@ flowchart LR
 Windows/macOS 共享同一 presentation 行为；platform head 只提供 target、Machine Subject 与本机 adapter。
 System 不进入 Marketplace，Package 不提供人工加载说明，主 UI 不显示随机 External Host Identity。
 
+2026-09-04 已完成宿主侧实现：`CollectorMarketplaceRuntime` 是 Desktop 与 Headless 共用的深模块，统一拥有
+Installation、默认 Instance、Driver、Activation、恢复、状态、重试与卸载；两个宿主不再各自编排这些阶段。
+macOS publish/Portable 实包已验证只含 System，最终包启动 smoke 留给 CI（issue 10 `ready-for-human`）。
+
 ### Feature 07：Browser 独立 Package 与真实纵切
 
 ```mermaid
@@ -240,10 +244,13 @@ flowchart LR
   `collector-contracts.yml` 验证。Browser 专属 runtime 与 protocol handler 仍然不存在，
   `/v1/collector-protocol/browser` 也不会回来；宿主提供的是通用
   `/v1/collector-protocol/external-host`（issue 06），谁被安装谁能连，宿主不为 Browser 加分支。因此 Browser
-  重新接上只差 Package 发布（issue 07）与 Desktop 安装入口（issue 10）。
+  重新接上只差 Package 发布（issue 07）；Desktop 通用安装入口已经完成（issue 10）。
 - `facts.segment/v1` 已统一走 ActivitySegment 投影：Package 自有 JSON Schema 先验证 payload，通用 projector
   再要求共同 `identityKey`，Hub 不再按 schema id / major 列出 Browser、VRChat 或测试 Collector。Hub.Tests
   也不再构建 Browser 或引用 VRChat 产品；VRChat ManagedProcess E2E 由 Collector 自身测试拥有。
+- Desktop 与 Headless 现在直接调用同一个 `CollectorMarketplaceRuntime`；Catalog、Installation、默认 Instance、
+  Driver dispatch、Activation、恢复、状态、重试与卸载只有一份实现。Desktop 只提供 Machine Subject，Headless
+  只提供 per-Instance analytics pipeline adapter。
 - Headless bootstrap 只含基础设施配置；手写 `instances`、`packageDirectory` 与
   `headless-instance-map.json` 已直接移除。Runtime state 是 Instance 唯一权威，重启按精确 Installation
   离线恢复；管理面只透出 Runtime 的真实阶段、授权挑战与失败。

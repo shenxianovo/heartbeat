@@ -255,9 +255,28 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
     /// Stops the current ManagedProcess activation, removes the durable Instance and all of its
     /// Fact state, then deletes its secret namespace and per-Instance data directory.
     /// </summary>
-    public async ValueTask RemoveInstanceAsync(
+    public ValueTask RemoveInstanceAsync(
         Guid collectorInstanceId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RemoveInstanceCoreAsync(collectorInstanceId, null, cancellationToken);
+
+    /// <summary>
+    /// Keeps the Instance removal fence raised while a lifecycle owner removes its Host projection
+    /// and exact Installation. A callback failure leaves the durable Instance present and retryable.
+    /// </summary>
+    internal ValueTask RemoveInstanceAsync(
+        Guid collectorInstanceId,
+        Func<CancellationToken, ValueTask> afterActivationsStopped,
+        CancellationToken cancellationToken) =>
+        RemoveInstanceCoreAsync(
+            collectorInstanceId,
+            afterActivationsStopped ?? throw new ArgumentNullException(nameof(afterActivationsStopped)),
+            cancellationToken);
+
+    private async ValueTask RemoveInstanceCoreAsync(
+        Guid collectorInstanceId,
+        Func<CancellationToken, ValueTask>? afterActivationsStopped,
+        CancellationToken cancellationToken)
     {
         ManagedProcessCollectorActivation? activation;
         lock (_gate)
@@ -290,6 +309,9 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
                 collectorInstanceId,
                 ExternalHostActivationStopReason.DesiredDisabled);
 
+            if (afterActivationsStopped is not null)
+                await afterActivationsStopped(cancellationToken);
+
             if (_secretStore is not null)
                 await _secretStore.DeleteInstanceAsync(collectorInstanceId, cancellationToken);
             var dataDirectory = Path.Combine(_instanceDataRoot, collectorInstanceId.ToString("N"));
@@ -308,6 +330,10 @@ public sealed partial class CollectorRuntime : IDisposable, IAsyncDisposable
                 _state = next;
                 _managedProcessStates.Remove(collectorInstanceId);
                 _managedProcessClients.Remove(collectorInstanceId);
+                foreach (var failureKey in _externalHostFailures.Keys
+                             .Where(key => key.CollectorInstanceId == collectorInstanceId)
+                             .ToArray())
+                    _externalHostFailures.Remove(failureKey);
             }
         }
         finally

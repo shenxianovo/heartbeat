@@ -6,6 +6,10 @@ using Heartbeat.Desktop.UI.Logging;
 using Heartbeat.Desktop.UI.Presentation;
 using Heartbeat.Desktop.UI.Views;
 using Heartbeat.Desktop.Updater.Velopack;
+using Heartbeat.Collection.Hub.Collectors.Packages;
+using Heartbeat.Collection.Hub.Collectors.Runtime;
+using Heartbeat.Collection.Hub.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
@@ -27,6 +31,12 @@ public sealed class MacDesktopRuntime : IWindowController, IAsyncDisposable
         _host = host;
         DesktopState = state;
         LogFeed = logFeed;
+        CollectorMarketplace = DesktopCollectorMarketplace.Open(
+            "macos",
+            host.Services.GetRequiredService<IDeviceIdentity>().HardwareId,
+            host.Services.GetRequiredService<CollectorPackageInstallations>(),
+            host.Services.GetRequiredService<CollectorRuntime>());
+        CollectorMarketplace.StartInstalledCollectors();
         Updates = new VelopackUpdateController(ReleaseChannel, PrepareForUpdateAsync);
         Updates.Start();
     }
@@ -34,6 +44,7 @@ public sealed class MacDesktopRuntime : IWindowController, IAsyncDisposable
     public MacDesktopState DesktopState { get; }
     public VelopackUpdateController Updates { get; }
     public RingBufferSink LogFeed { get; }
+    public DesktopCollectorMarketplace CollectorMarketplace { get; }
     public bool IsShutdownPrepared => Volatile.Read(ref _stopped) != 0;
 
     public void Attach(
@@ -92,12 +103,14 @@ public sealed class MacDesktopRuntime : IWindowController, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
         Log.Information("正在停止 macOS Heartbeat Agent...");
+        await CollectorMarketplace.StopAsync();
         await _host.StopAsync();
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAgentAsync();
+        await CollectorMarketplace.DisposeAsync();
         Updates.Dispose();
         DesktopState.Dispose();
         _menuBarIcon?.Dispose();

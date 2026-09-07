@@ -14,6 +14,8 @@ using Heartbeat.Collection.Hub.Presence;
 using Heartbeat.Collection.Hub.Upload;
 using Heartbeat.Desktop.Windows.Services;
 using Heartbeat.Collection.Hub.Collectors.Runtime;
+using Heartbeat.Collection.Hub.Collectors.Packages;
+using Heartbeat.Collection.Hub.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -45,6 +47,12 @@ public sealed class WindowsDesktopRuntime : IWindowController, IAsyncDisposable
             host.Services.GetRequiredService<IAutoStartService>(),
             host.Services.GetRequiredService<IClientCompatibilityStatus>(),
             host.Services.GetRequiredService<IUploadStatus>());
+        CollectorMarketplace = DesktopCollectorMarketplace.Open(
+            "windows",
+            host.Services.GetRequiredService<IDeviceIdentity>().HardwareId,
+            host.Services.GetRequiredService<CollectorPackageInstallations>(),
+            host.Services.GetRequiredService<CollectorRuntime>());
+        CollectorMarketplace.StartInstalledCollectors();
         var channel = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
             ? "win-arm64"
             : "win-x64";
@@ -55,6 +63,7 @@ public sealed class WindowsDesktopRuntime : IWindowController, IAsyncDisposable
     public WindowsDesktopState DesktopState { get; }
     public VelopackUpdateController Updates { get; }
     public RingBufferSink LogFeed { get; }
+    public DesktopCollectorMarketplace CollectorMarketplace { get; }
     public bool IsShutdownPrepared => Volatile.Read(ref _stopped) != 0;
 
     public void Attach(
@@ -116,12 +125,14 @@ public sealed class WindowsDesktopRuntime : IWindowController, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
         Log.Information("正在停止 Heartbeat Agent...");
+        await CollectorMarketplace.StopAsync();
         await _host.StopAsync();
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAgentAsync();
+        await CollectorMarketplace.DisposeAsync();
         Updates.Dispose();
         DesktopState.Dispose();
         _trayIcon?.Dispose();

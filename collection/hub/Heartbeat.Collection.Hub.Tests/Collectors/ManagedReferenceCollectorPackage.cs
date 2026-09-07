@@ -75,6 +75,17 @@ internal sealed class ManagedReferenceCollectorPackage : IDisposable
                 version = configVersion,
                 accepts = acceptedConfigVersions
             },
+            presentation = new
+            {
+                displayName = "Reference Managed Collector",
+                summary = "A generic ManagedProcess Collector used for host lifecycle tests."
+            },
+            defaultInstance = new
+            {
+                subjectKind = "account",
+                configVersion,
+                config = new { }
+            },
             outputs = new[]
             {
                 new

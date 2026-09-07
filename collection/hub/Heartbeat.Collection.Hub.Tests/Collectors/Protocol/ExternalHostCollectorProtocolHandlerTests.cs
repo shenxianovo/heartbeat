@@ -259,6 +259,10 @@ public sealed class ExternalHostCollectorProtocolHandlerTests
             appIdentityKey: "app.two");
 
         Assert.Equal("external_host_identity_conflict", ErrorCode(response));
+        var status = fixture.Runtime.DescribeExternalHostInstance(
+            Assert.Single(fixture.Runtime.ListInstances()).CollectorInstanceId);
+        Assert.Equal("external_host_identity_conflict", status.Failure?.Code);
+        Assert.Contains(HandlerFixture.DefaultHostIdentity, status.Failure?.Message);
         await fixture.PublishAsync(current, "still-owned");
         Assert.Single(fixture.Sink.GetAndClearSegments());
     }
@@ -279,6 +283,9 @@ public sealed class ExternalHostCollectorProtocolHandlerTests
 
         var reconnect = await fixture.ReadyAsync(HandlerFixture.DefaultHostIdentity, "app.one");
         Assert.NotNull(reconnect);
+        var status = fixture.Runtime.DescribeExternalHostInstance(
+            Assert.Single(fixture.Runtime.ListInstances()).CollectorInstanceId);
+        Assert.Null(status.Failure);
     }
 
     [Fact]

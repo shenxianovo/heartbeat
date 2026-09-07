@@ -15,7 +15,8 @@ public sealed record CollectorInstanceExternalHostStatus(
     Guid CollectorInstanceId,
     CollectorInstanceExternalHostState State,
     int ConnectedExternalHosts,
-    int NegotiatingExternalHosts);
+    int NegotiatingExternalHosts,
+    CollectorRuntimeFailure? Failure = null);
 
 public sealed partial class CollectorRuntime
 {
@@ -38,6 +39,8 @@ public sealed partial class CollectorRuntime
     /// 或失败回滚。
     /// </summary>
     private readonly HashSet<Guid> _instancesBeingRemoved = [];
+    private readonly Dictionary<(Guid CollectorInstanceId, string ExternalHostIdentity), CollectorRuntimeFailure>
+        _externalHostFailures = [];
 
     internal ExternalHostCollectorActivation FindExternalHostActivation(Guid activationId)
     {
@@ -108,6 +111,7 @@ public sealed partial class CollectorRuntime
                     "stream_writer_conflict",
                     "Another Activation still owns this External Host Identity.");
             ValidateExternalHostIdentityBindingLocked(collectorInstanceId, identity, appIdentity);
+            _externalHostFailures.Remove((collectorInstanceId, identity));
             var activationId = NextUniqueId(
                 id => _pendingExternalHostActivations.ContainsKey(id) ||
                       _externalHostActivations.ContainsKey(id) ||
@@ -402,6 +406,10 @@ public sealed partial class CollectorRuntime
                 !stream.Dimensions.TryGetValue(AppIdentityKeyDimension, out var boundAppIdentityKey) ||
                 string.Equals(boundAppIdentityKey, appIdentityKey, StringComparison.Ordinal))
                 continue;
+            RecordExternalHostIdentityConflictLocked(
+                collectorInstanceId,
+                externalHostIdentity,
+                appIdentityKey);
             throw ActivationError(
                 "external_host_identity_conflict",
                 "External Host Identity is already bound to a different appIdentityKey.");
@@ -484,9 +492,38 @@ public sealed partial class CollectorRuntime
                 collectorInstanceId,
                 state,
                 connected,
-                negotiating);
+                negotiating,
+                _externalHostFailures
+                    .Where(failure => failure.Key.CollectorInstanceId == collectorInstanceId)
+                    .Select(failure => failure.Value)
+                    .FirstOrDefault());
         }
     }
+
+    internal void ReportExternalHostIdentityConflict(
+        Guid collectorInstanceId,
+        string externalHostIdentity,
+        string appIdentityKey)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            _ = GetInstanceStateLocked(collectorInstanceId);
+            RecordExternalHostIdentityConflictLocked(
+                collectorInstanceId,
+                externalHostIdentity,
+                appIdentityKey);
+        }
+    }
+
+    private void RecordExternalHostIdentityConflictLocked(
+        Guid collectorInstanceId,
+        string externalHostIdentity,
+        string appIdentityKey) =>
+        _externalHostFailures[(collectorInstanceId, externalHostIdentity)] = new CollectorRuntimeFailure(
+            "external_host_identity_conflict",
+            $"External Host '{externalHostIdentity}' attempted to use appIdentityKey '{appIdentityKey}', " +
+            "but that identity is already bound to a different appIdentityKey.");
 
     /// <summary>
     /// 停止某个 Instance 下所有 pending 与 active 的 External Host 生命周期，并等到它们真正走完终态

@@ -174,7 +174,9 @@ _Avoid_: Headless Instance JSON、Hub 内的 PackageId 分支、用户填写内�
 
 **Collector Marketplace（采集器市场）**:
 Host 用于浏览官方 Catalog，并把一个 Catalog Latest 安装成精确 Installation 与默认 Instance 的通用交互；
-它不允许任意 URL 安装，也不负责已安装 Package 的版本更新。
+它不允许任意 URL 安装，也不负责已安装 Package 的版本更新。Desktop 与 Headless 共用同一个 Marketplace
+Runtime；该 Runtime 拥有 Driver dispatch、Activation、恢复、状态、重试与卸载，宿主 adapter 只提供 Subject
+与本地投影挂载。
 _Avoid_: Update Manager、Package URL 输入框、具名 Collector 安装器
 
 **Collector Package Release（采集器包发布）**:
@@ -234,9 +236,9 @@ _Avoid_: 用一个 bool 同时表示用户开关、权限与实际可用性
 用户把某个 Collector Instance 的 Desired State 设为 `enabled=false`；Collector Runtime 负责停止或拒绝该 Instance 的 Activation，并保留 Installation、Instance 身份与配置。ExternalHost 的停用只约束对应 Instance，不以 Source 级全局开关代替；主卡上的“全部启用/停用”只是对多个 Instance 执行批量变更，不形成另一份 Desired State。
 
 **采集器页（Collector page）**:
-共享桌面 UI 中管理采集器的页面，并容纳采集器设置。当前实现只显示 System BuiltIn：system 采集器不可停用，前台应用采集作为无开关的固定基线，其他可选观测深度作为独立采集能力管理。每项能力的开关、实际状态、权限恢复动作与说明都归属 System 条目，不另建脱离所有者的全局“采集能力”区块。窗口活动采集是一个用户能力，不把 focused-window 切换与原始标题拆成两个开关。
+共享桌面 UI 中管理采集器的页面，并容纳采集器设置。System BuiltIn 不进入 Marketplace：system 采集器不可停用，前台应用采集作为无开关的固定基线，其他可选观测深度作为独立采集能力管理。每项能力的开关、实际状态、权限恢复动作与说明都归属 System 条目，不另建脱离所有者的全局“采集能力”区块。窗口活动采集是一个用户能力，不把 focused-window 切换与原始标题拆成两个开关。
 
-通用 ExternalHost / Instance UI 尚未实现（issue 10）；宿主侧的通用 ExternalHost 接入已就位（`/v1/collector-protocol/external-host`，issue 06），但 Browser 还没有可安装的 Package，因此它当前仍没有实际接入路径或卡片。未来的外部 Collector 管理 UI 由 Catalog、Installation、Instance 与 Runtime State 驱动通用条目：主卡只显示安装事实、“等待连接”、“运行中 · N 个连接”或简短错误，Activation、External Host Identity 与协议错误只进入高级诊断。Host 不提供 Package 人工加载说明、打开目录或具名 App 子项（ADR-051）。
+通用 Marketplace / ExternalHost UI 已实现（issues 06/10），由 Catalog、Installation、Instance 与 Runtime State 驱动通用条目：主卡只显示安装事实、“等待连接”、“运行中 · N 个连接”或简短错误，Activation、External Host Identity 与协议错误只进入展开诊断。Browser 仍没有已发布的 Desktop Package，所以当前 Catalog 不会凭空出现 Browser 卡片。Host 不提供 Package 人工加载说明、打开目录或具名 App 子项（ADR-051）。
 _Avoid_: 采集器栏、Collector panel、为某个具体 Collector 在宿主 UI 写死卡片
 
 **Setup**:

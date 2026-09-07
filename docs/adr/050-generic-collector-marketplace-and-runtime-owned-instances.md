@@ -44,6 +44,13 @@ Hub 重启只从精确 Installation 恢复，不访问 Web。手写 `instances`�
 - ⚠️ Registry 获得一个有意为之的 mutable Catalog Latest；它只用于首次发现，本轮不承诺更新已安装 Package。
 - ⚠️ 旧 Headless 配置不再启动，owner 需要备份后清理旧 data/config 并通过管理页重新安装、登录。
 
+## Implementation update: 2026-09-04
+
+Desktop 已成为第二个真实调用者。共享模块进一步收敛为 `ICollectorMarketplaceRuntime`：除了 Web 获取和
+Installation，它还统一拥有默认 Instance、Driver dispatch、Activation、恢复、状态、重试与卸载。Desktop 与
+Headless 只实现 Subject/本地投影 adapter；这是对本 ADR“同一共享 Marketplace module”边界的落地，不改变
+Catalog Latest 与 Runtime State 分权的原决策。
+
 ## References
 
 - [ADR-048](./048-shared-collector-host-runtime-and-independent-release-units.md)

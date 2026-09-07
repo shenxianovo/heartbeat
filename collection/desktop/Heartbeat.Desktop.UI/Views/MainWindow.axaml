@@ -186,7 +186,16 @@
     <Grid>
       <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="24,22,24,26" Spacing="12">
-          <TextBlock Text="采集器" Classes="page-title" Margin="2,0,0,2" />
+          <Grid ColumnDefinitions="*,Auto" Margin="2,0,0,2">
+            <TextBlock Text="采集器" Classes="page-title" />
+            <Button Grid.Column="1" Content="刷新" Classes="ghost"
+                    Command="{Binding RefreshCollectorMarketplaceCommand}" />
+          </Grid>
+
+          <TextBlock Text="{Binding CollectorMarketplaceError}"
+                     IsVisible="{Binding !!CollectorMarketplaceError}"
+                     Foreground="{DynamicResource HeartbeatWarningBrush}"
+                     TextWrapping="Wrap" />
 
           <ItemsControl ItemsSource="{Binding Collectors}">
             <ItemsControl.ItemTemplate>
@@ -250,6 +259,65 @@
                     </controls:SettingsExpander.ItemTemplate>
                   </controls:SettingsExpander>
 
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <ItemsControl ItemsSource="{Binding MarketplaceCollectors}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Grid Margin="0,0,0,4">
+                  <controls:SettingsExpander IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
+                                             Header="{Binding DisplayName}"
+                                             Description="{Binding Summary}">
+                    <controls:SettingsExpander.HeaderIcon>
+                      <Border Width="38" Height="38" CornerRadius="10"
+                              Background="{DynamicResource HeartbeatPrimarySoftBrush}">
+                        <LucideIcon Kind="Package" Size="19" StrokeWidth="1.7"
+                                    Foreground="{DynamicResource HeartbeatPrimaryBrush}"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                    </controls:SettingsExpander.HeaderIcon>
+                    <controls:SettingsExpander.ActionContent>
+                      <TextBlock Text="{Binding StatusText}" FontSize="11" Classes="muted"
+                                 VerticalAlignment="Center" />
+                    </controls:SettingsExpander.ActionContent>
+                    <controls:SettingsExpander.ItemsHeader>
+                      <StackPanel Margin="16,12,16,8" Spacing="5">
+                        <TextBlock Text="{Binding VersionText, StringFormat='版本 {0}'}" Classes="muted" />
+                        <TextBlock Text="{Binding Detail}" IsVisible="{Binding HasDetail}"
+                                   Foreground="{DynamicResource HeartbeatWarningBrush}"
+                                   TextWrapping="Wrap" />
+                      </StackPanel>
+                    </controls:SettingsExpander.ItemsHeader>
+                    <controls:SettingsExpander.ItemsFooter>
+                      <StackPanel Margin="16,6,16,14" Spacing="8">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <Button Content="安装" Classes="primary"
+                                  IsVisible="{Binding CanInstall}"
+                                  IsEnabled="{Binding !IsBusy}"
+                                  Command="{Binding InstallCommand}" />
+                          <Button Content="重试" Classes="primary"
+                                  IsVisible="{Binding CanRetry}"
+                                  IsEnabled="{Binding !IsBusy}"
+                                  Command="{Binding RetryCommand}" />
+                          <Button Content="卸载" Classes="ghost"
+                                  IsVisible="{Binding IsInstalled}"
+                                  IsEnabled="{Binding !IsBusy}"
+                                  Command="{Binding RequestUninstallCommand}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8"
+                                    IsVisible="{Binding IsUninstallConfirmationVisible}">
+                          <TextBlock Text="确认卸载？" VerticalAlignment="Center" />
+                          <Button Content="确认" Classes="primary"
+                                  Command="{Binding ConfirmUninstallCommand}" />
+                          <Button Content="取消" Classes="ghost"
+                                  Command="{Binding CancelUninstallCommand}" />
+                        </StackPanel>
+                      </StackPanel>
+                    </controls:SettingsExpander.ItemsFooter>
+                  </controls:SettingsExpander>
                 </Grid>
               </DataTemplate>
             </ItemsControl.ItemTemplate>

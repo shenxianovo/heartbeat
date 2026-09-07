@@ -35,7 +35,8 @@ public partial class App : Application
                 Runtime.Updates,
                 Runtime,
                 new AvaloniaPresentationScheduler(),
-                Runtime.LogFeed);
+                Runtime.LogFeed,
+                Runtime.CollectorMarketplace);
             var window = new MainWindow(viewModel)
             {
                 Icon = LoadIcon()

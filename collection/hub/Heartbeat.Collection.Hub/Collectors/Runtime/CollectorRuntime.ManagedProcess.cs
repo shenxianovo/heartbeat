@@ -458,7 +458,10 @@ public sealed partial class CollectorRuntime
         var last = timeProvider.GetTimestamp();
         while (!activationTask.IsCompleted)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            // The activation task owns startup cleanup and receives the same cancellation through
+            // its linked token. Join it before returning, including when authorization was pending.
+            if (cancellationToken.IsCancellationRequested)
+                break;
             var waitingForAuthorization = client.IsWaitingForAuthorization;
             var slice = waitingForAuthorization
                 ? TimeSpan.FromMilliseconds(50)

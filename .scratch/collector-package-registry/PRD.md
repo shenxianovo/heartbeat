@@ -15,13 +15,14 @@ Instance，Runtime 成为动态 Instance 唯一权威。Headless 独立 deploy�
 安装/授权/恢复/卸载 smoke 均已完成。通用 ExternalHost 接入已按
 [ADR-051](../../docs/adr/051-generic-external-host-identity-and-browser-delivery.md) 实现（issue 06）：一条
 `/v1/collector-protocol/external-host` route 承载全部自己出现的 External Host，所有权按 External Host Identity
-而非整个 Instance 隔离。当前主缺口是 Desktop Marketplace 调用者与 Browser 独立 Release。
+而非整个 Instance 隔离。Desktop Marketplace 已实现并与 Headless 共用完整生命周期 Runtime；当前主缺口是
+Browser 独立 Release 与真实 Desktop Browser 纵切，Desktop 最终包的新启动 smoke 仍待 CI/human gate。
 
 Browser 现在的状态是“代码与 Desktop 解耦、但尚未形成 Web Release 和宿主接入”：它不进 Desktop 构建与产物，扩展代码、Package
 构建 target 与 npm 测试留在 `collection/collectors/Heartbeat.Collector.Browser` 并由 `collector-contracts.yml`
 验证；但宿主里没有 Browser runtime、专属 protocol handler、安装目录或 UI 条目，`/v1/collector-protocol/browser`
 也不存在。宿主侧的通用接入能力已经就位（issue 06），Browser 要重新连上只差自己的 Package 发布与被安装
-（issue 07）与 Desktop Marketplace 调用者（issue 10）；宿主不会为它加任何具名分支。
+（issue 07）；Desktop Marketplace 调用者已经完成（issue 10），宿主不会为它加任何具名分支。
 
 2026-09-01 以前的 Registry/Approve/Switch 实现已撤回。issues 01/02 已按 ADR-048/050 完成；issues 06/07
 已按 [ADR-051](../../docs/adr/051-generic-external-host-identity-and-browser-delivery.md) 重写，issue 10 承接
@@ -87,11 +88,11 @@ Browser 独立发布与真实 smoke。
 | 05 VRChat ready switch | wontfix | ADR-048 明确不做 candidate/LKG switch |
 | 06 generic ExternalHost | ready-for-human | 通用 route、身份级 Activation/Stream ownership 与卸载已实现 |
 | 07 Browser release and smoke | ready-for-agent | Browser Collector 自身、四 target Release 与真实 smoke |
-| 10 Desktop Marketplace | ready-for-agent | Desktop 原生通用安装/状态/卸载界面 |
+| 10 Desktop Marketplace | ready-for-human | 实现与自动测试完成；最终 Windows/macOS 包启动 smoke 待 CI |
 
 ## Exit conditions
 
-- [ ] Headless 与 Desktop 使用同一个 Package Installation module。
+- [x] Headless 与 Desktop 使用同一个 Package Installation module，并共用 Marketplace lifecycle Runtime。
 - [x] VRChat Package 可独立于 Headless image 构建和替换。
 - [x] Backend 与 Headless deployment 分离（`deploy-hub.yml` 只部署 Headless Hub）。
 - [ ] VRChat 与 Browser 各自通过显式 tag 发布 Web Package。
@@ -100,11 +101,11 @@ Browser 独立发布与真实 smoke。
       Instance 失败被隔离（issue 08）。
 - [x] 宿主不认识具名可选 Collector：Desktop 与通用 Hub Runtime 只组合通用 seam + System BuiltIn，
       Browser 专属 runtime / protocol handler / 安装目录 / UI 条目全部删除（issue 09）。
-- [ ] 通用 ExternalHost 安装/连接能力存在，Browser 由此重新获得宿主接入路径：通用一半已完成（issue 06），
-      Browser 侧接入待 issue 07/10。
+- [ ] 通用 ExternalHost 安装/连接能力存在，Browser 由此重新获得宿主接入路径：宿主通用接入与 Desktop
+      Marketplace 已完成（issues 06/10），Browser Package 发布与真实接入待 issue 07。
 - [x] `facts.segment/v1` 由 Package `FactKind` 与 schema 驱动通用 ActivitySegment 投影，宿主不再硬编码
       具名 schema id 列表（issue 09）。
-- [ ] 三类 Driver 继续通过统一 Protocol conformance。
+- [x] 三类 Driver 继续通过统一 Protocol conformance。
 - [x] 真实 Headless VRChat Marketplace smoke 有证据。
 - [ ] 真实 Desktop Browser smoke 有证据。
 

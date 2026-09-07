@@ -30,7 +30,9 @@ public static class SystemCollectorServiceCollectionExtensions
             return CollectorRuntime.Open(
                 Path.Combine(bindingOptions.DataDirectory, "collector-runtime.json"),
                 provider.GetRequiredService<ISegmentSink>(),
-                inputEventSink: provider.GetRequiredService<IInputEventFactSink>());
+                inputEventSink: provider.GetRequiredService<IInputEventFactSink>(),
+                secretStore: new EncryptedFileCollectorSecretStore(
+                    Path.Combine(bindingOptions.DataDirectory, "collector-secrets")));
         });
         services.AddHostedService<SystemCollectorHostedService>();
         return services;

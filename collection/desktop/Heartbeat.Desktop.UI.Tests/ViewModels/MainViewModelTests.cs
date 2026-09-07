@@ -11,6 +11,106 @@ namespace Heartbeat.Desktop.UI.Tests.ViewModels;
 public sealed class MainViewModelTests
 {
     [Fact]
+    public async Task CollectorMarketplace_PresentsCatalogItemsWithoutChangingTheSystemBuiltIn()
+    {
+        var marketplace = new FakeCollectorMarketplace(
+        [
+            new CollectorMarketplaceSnapshot(
+                "example.collector",
+                "Example Collector",
+                "A generic independently delivered Collector.",
+                "2.3.4",
+                null,
+                CollectorMarketplacePhase.NotInstalled)
+        ]);
+        using var viewModel = TestViewModel.Create(marketplace: marketplace);
+
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+
+        Assert.Equal("system", Assert.Single(viewModel.Collectors).Source);
+        var item = Assert.Single(viewModel.MarketplaceCollectors);
+        Assert.Equal("example.collector", item.PackageId);
+        Assert.Equal("Example Collector", item.DisplayName);
+        Assert.Equal("未安装", item.StatusText);
+    }
+
+    [Fact]
+    public async Task CollectorMarketplace_InstallAndConfirmedUninstallUseOnlyTheGenericPackageId()
+    {
+        var marketplace = new FakeCollectorMarketplace(
+        [
+            new CollectorMarketplaceSnapshot(
+                "sample.package", "Sample", "Summary", "1.0.0", null,
+                CollectorMarketplacePhase.NotInstalled)
+        ]);
+        using var viewModel = TestViewModel.Create(marketplace: marketplace);
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+        var item = Assert.Single(viewModel.MarketplaceCollectors);
+
+        await item.InstallCommand.ExecuteAsync(null);
+
+        Assert.Equal("sample.package", marketplace.InstalledPackageId);
+        Assert.False(item.IsUninstallConfirmationVisible);
+
+        marketplace.Snapshots =
+        [
+            new CollectorMarketplaceSnapshot(
+                "sample.package", "Sample", "Summary", "1.0.0", "1.0.0",
+                CollectorMarketplacePhase.Waiting)
+        ];
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+        item.RequestUninstallCommand.Execute(null);
+        Assert.True(item.IsUninstallConfirmationVisible);
+
+        await item.ConfirmUninstallCommand.ExecuteAsync(null);
+
+        Assert.Equal("sample.package", marketplace.UninstalledPackageId);
+    }
+
+    [Fact]
+    public async Task CollectorMarketplace_InstallFailureRemainsVisibleAndCanBeRetried()
+    {
+        var marketplace = new FakeCollectorMarketplace(
+        [
+            new CollectorMarketplaceSnapshot(
+                "sample.package", "Sample", "Summary", "1.0.0", null,
+                CollectorMarketplacePhase.NotInstalled)
+        ]) { InstallException = new InvalidOperationException("download unavailable") };
+        using var viewModel = TestViewModel.Create(marketplace: marketplace);
+        await viewModel.RefreshCollectorMarketplaceCommand.ExecuteAsync(null);
+
+        await Assert.Single(viewModel.MarketplaceCollectors).InstallCommand.ExecuteAsync(null);
+
+        Assert.Equal("安装失败", viewModel.CollectorMarketplaceError);
+        Assert.Equal("download unavailable", Assert.Single(viewModel.MarketplaceCollectors).Detail);
+        marketplace.InstallException = null;
+        await Assert.Single(viewModel.MarketplaceCollectors).RetryCommand.ExecuteAsync(null);
+        Assert.Null(viewModel.CollectorMarketplaceError);
+    }
+
+    [Fact]
+    public void CollectorMarketplace_IdentityConflictUsesAShortStatusAndKeepsIdentityInDetails()
+    {
+        var item = new MarketplaceCollectorItemViewModel(
+            new CollectorMarketplaceSnapshot(
+                "sample.package",
+                "Sample",
+                "Summary",
+                "1.0.0",
+                "1.0.0",
+                CollectorMarketplacePhase.ConnectionConflict,
+                Detail: "External Host 'random-host-id' is already bound."),
+            _ => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.CompletedTask);
+
+        Assert.Equal("连接冲突", item.StatusText);
+        Assert.DoesNotContain("random-host-id", item.StatusText);
+        Assert.Contains("random-host-id", item.Detail);
+        Assert.False(item.CanRetry);
+    }
+
+    [Fact]
     public void CurrentActivity_IsPresentedWithoutCreatingANativeWindow()
     {
         var state = new FakeDesktopState

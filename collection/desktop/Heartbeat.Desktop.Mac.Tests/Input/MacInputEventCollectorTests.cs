@@ -14,6 +14,24 @@ public sealed class MacInputEventCollectorTests : IDisposable
         $"heartbeat-mac-input-{Guid.NewGuid()}");
 
     [Fact]
+    public async Task NativeFailure_IsReportedWithoutOverwritingTheEnabledIntent()
+    {
+        var config = NewConfig();
+        config.Update(value => value.InputEventRecordingEnabled = true);
+        var native = new FakeNative { IsAuthorized = true };
+        using var collector = new MacInputEventCollector(config, native, new FakeCommandRunner(),
+            new FakeSignal(), new InputEventBuffer(new FixedClock()));
+        await collector.StartAsync(CancellationToken.None);
+        native.RaiseFailure(new IOException("event tap failed"));
+        Assert.Equal(MacInputMonitoringCapabilityState.Unavailable, collector.CapabilityState);
+        Assert.True(config.Current.InputEventRecordingEnabled);
+        Assert.False(native.Running);
+        collector.SetInputEventRecordingEnabledFromUser(true);
+        Assert.Equal(MacInputMonitoringCapabilityState.Available, collector.CapabilityState);
+        Assert.True(native.Running);
+    }
+
+    [Fact]
     public async Task EnablingInteraction_RequestsPermissionWithoutStartingAnUnauthorizedHook()
     {
         var config = NewConfig();
@@ -144,6 +162,138 @@ public sealed class MacInputEventCollectorTests : IDisposable
         Assert.Equal(MacInputMonitoringCapabilityState.PermissionRequired, collector.CapabilityState);
     }
 
+    [Fact]
+    public async Task StopDuringStart_JoinsTheTransitionAndLeavesNoRunningHook()
+    {
+        var config = NewConfig();
+        config.Update(value => value.InputEventRecordingEnabled = true);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var native = new FakeNative
+        {
+            IsAuthorized = true,
+            BeforeStart = () => { entered.Set(); Assert.True(release.Wait(TimeSpan.FromSeconds(5))); }
+        };
+        using var collector = new MacInputEventCollector(config, native, new FakeCommandRunner(),
+            new FakeSignal(), new InputEventBuffer(new FixedClock()));
+        var starting = Task.Run(() => collector.StartAsync(CancellationToken.None));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        var stopping = collector.StopAsync(CancellationToken.None);
+        try { Assert.False(stopping.IsCompleted); }
+        finally { release.Set(); await starting; await stopping; }
+        Assert.False(native.Running);
+        Assert.Equal(1, native.StartCount);
+        Assert.Equal(1, native.StopCount);
+    }
+
+    [Fact]
+    public async Task RapidChangesDuringStart_ConvergeWithoutRestartingForPendingIntermediateIntent()
+    {
+        var config = NewConfig();
+        config.Update(value => value.InputEventRecordingEnabled = true);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var native = new FakeNative
+        {
+            IsAuthorized = true,
+            BeforeStart = () =>
+        {
+            entered.Set(); Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        }
+        };
+        using var collector = new MacInputEventCollector(config, native, new FakeCommandRunner(),
+            new FakeSignal(), new InputEventBuffer(new FixedClock()));
+        var starting = Task.Run(() => collector.StartAsync(CancellationToken.None));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        try
+        {
+            config.Update(value => value.InputEventRecordingEnabled = false);
+            config.Update(value => value.InputEventRecordingEnabled = true);
+        }
+        finally { release.Set(); await starting; }
+        Assert.True(native.Running);
+        Assert.Equal(1, native.StartCount);
+        Assert.Equal(0, native.StopCount);
+    }
+
+    [Fact]
+    public async Task PermissionRevoked_RejectsObservationsWhileNativeStopIsStillPending()
+    {
+        var config = NewConfig();
+        config.Update(value => value.InputEventRecordingEnabled = true);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var native = new FakeNative
+        {
+            IsAuthorized = true,
+            BeforeStop = () =>
+        {
+            entered.Set(); Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        }
+        };
+        var buffer = new InputEventBuffer(new FixedClock());
+        using var collector = new MacInputEventCollector(config, native, new FakeCommandRunner(), new FakeSignal(), buffer);
+        await collector.StartAsync(CancellationToken.None);
+        native.IsAuthorized = false;
+        var refreshing = Task.Run(collector.RefreshPermission);
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        try
+        {
+            native.Raise(new MacInputObservation(MacInputObservationKind.KeyDown, 0x00));
+            Assert.Empty(buffer.DrainAll());
+        }
+        finally { release.Set(); await refreshing; }
+    }
+
+    [Fact]
+    public async Task StopCompletion_DoesNotRequireCallerContextWhileNativeStartIsPending()
+    {
+        var config = NewConfig();
+        config.Update(value => value.InputEventRecordingEnabled = true);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var native = new FakeNative
+        {
+            IsAuthorized = true,
+            BeforeStart = () =>
+        {
+            entered.Set(); Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        }
+        };
+        using var collector = new MacInputEventCollector(config, native, new FakeCommandRunner(),
+            new FakeSignal(), new InputEventBuffer(new FixedClock()));
+        var starting = Task.Run(() => collector.StartAsync(CancellationToken.None));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        var context = new QueuedContext();
+        var previous = SynchronizationContext.Current;
+        Task stopping;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            stopping = collector.StopAsync(CancellationToken.None);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); release.Set(); }
+        await starting;
+        try { await stopping.WaitAsync(TimeSpan.FromSeconds(2)); }
+        finally
+        {
+            // If the regression returns, release its captured continuations before disposing the fixture.
+            for (var i = 0; !stopping.IsCompleted && i < 100; i++)
+            {
+                context.Drain();
+                await Task.Delay(10);
+            }
+        }
+        collector.Dispose();
+    }
+
+    private sealed class QueuedContext : SynchronizationContext
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _queue = new();
+        public override void Post(SendOrPostCallback callback, object? state) => _queue.Enqueue(() => callback(state));
+        public void Drain() { while (_queue.TryDequeue(out var action)) action(); }
+    }
+
     private MacConfigManager NewConfig() => new(new MacAgentPaths(_root));
 
     public void Dispose()
@@ -155,14 +305,19 @@ public sealed class MacInputEventCollectorTests : IDisposable
     private sealed class FakeNative : IMacInputMonitoringNative
     {
         public event Action<MacInputObservation>? Observation;
+        public event Action<Exception>? Failed;
+        public void RaiseFailure(Exception error) => Failed?.Invoke(error);
         public bool IsAvailable { get; set; } = true;
         public bool IsAuthorized { get; set; }
         public int RequestCount { get; private set; }
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
         public void RequestAuthorization() => RequestCount++;
-        public void StartListening() => StartCount++;
-        public void StopListening() => StopCount++;
+        public Action? BeforeStart { get; init; }
+        public Action? BeforeStop { get; init; }
+        public bool Running { get; private set; }
+        public void StartListening() { BeforeStart?.Invoke(); StartCount++; Running = true; }
+        public void StopListening() { BeforeStop?.Invoke(); StopCount++; Running = false; }
         public void Raise(MacInputObservation observation) => Observation?.Invoke(observation);
     }
 

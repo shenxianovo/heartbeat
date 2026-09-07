@@ -192,6 +192,7 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
 
     private sealed class FakeAccessibilityNative : IMacAccessibilityNative
     {
+        public event Action<Exception>? Failed { add { } remove { } }
         public event Action<MacAccessibilityObservation>? Observation { add { } remove { } }
         public bool IsAvailable => true;
         public bool IsProcessTrusted => false;
@@ -203,6 +204,7 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
 
     private sealed class FakeInputMonitoringNative : IMacInputMonitoringNative
     {
+        public event Action<Exception>? Failed { add { } remove { } }
         public event Action<MacInputObservation>? Observation { add { } remove { } }
         public bool IsAvailable => true;
         public bool IsAuthorized => false;

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Heartbeat.Collector.System.Observations;
 using Heartbeat.Desktop.Mac.Input;
 using Serilog;
 
@@ -28,13 +29,10 @@ public sealed class MacInputMonitoringNative : IMacInputMonitoringNative, IDispo
         0,
         "kCFRunLoopDefaultMode",
         0x08000100);
-    private static readonly EventTapCallback Callback = HandleEvent;
+    private static readonly EventTapCallback Callback = Session.HandleEvent;
 
     private readonly object _gate = new();
-    private CancellationTokenSource? _threadCts;
-    private Thread? _thread;
-    private nint _eventTap;
-    private nint _runLoop;
+    private Session? _session;
     private bool _disposed;
 
     public MacInputMonitoringNative()
@@ -44,6 +42,7 @@ public sealed class MacInputMonitoringNative : IMacInputMonitoringNative, IDispo
     }
 
     public event Action<MacInputObservation>? Observation;
+    public event Action<Exception>? Failed;
 
     public bool IsAvailable => OperatingSystem.IsMacOSVersionAtLeast(10, 15);
     public bool IsAuthorized => IsAvailable && Native.CGPreflightListenEventAccess();
@@ -57,144 +56,160 @@ public sealed class MacInputMonitoringNative : IMacInputMonitoringNative, IDispo
 
     public void StartListening()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!IsAuthorized) return;
-
         lock (_gate)
         {
-            if (_thread is { IsAlive: true }) return;
-            _threadCts = new CancellationTokenSource();
-            _thread = new Thread(() => RunEventLoop(_threadCts.Token))
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!IsAuthorized) return;
+            if (_session is { } current && !current.Thread.Completion.IsCompleted)
             {
-                IsBackground = true,
-                Name = "Heartbeat macOS Input Monitoring"
-            };
-            _thread.Start();
+                if (current.Thread.IsStopping)
+                    throw new InvalidOperationException("The previous input session is still stopping.");
+                return;
+            }
+            _session = new Session(this);
+            _session.Thread.Start();
         }
     }
 
     public void StopListening()
     {
-        Thread? thread;
+        Session? session;
+        lock (_gate) session = _session;
+        session?.Thread.Stop(TimeSpan.FromSeconds(2));
         lock (_gate)
-        {
-            _threadCts?.Cancel();
-            thread = _thread;
-            if (_runLoop != 0)
-                Native.CFRunLoopStop(_runLoop);
-        }
-
-        if (thread != null && thread != Thread.CurrentThread)
-            thread.Join(TimeSpan.FromSeconds(2));
-
-        lock (_gate)
-        {
-            _thread = null;
-            _threadCts?.Dispose();
-            _threadCts = null;
-        }
+            if (ReferenceEquals(_session, session) && session?.Thread.Completion.IsCompleted == true)
+                _session = null;
     }
 
-    private void RunEventLoop(CancellationToken cancellationToken)
+    private void Publish(Session session, MacInputObservation observation)
     {
-        var handle = GCHandle.Alloc(this);
-        var source = nint.Zero;
-        try
-        {
-            _eventTap = Native.CGEventTapCreate(
-                SessionEventTap,
-                HeadInsertEventTap,
-                ListenOnly,
-                EventMask,
-                Callback,
-                GCHandle.ToIntPtr(handle));
-            if (_eventTap == 0)
-            {
-                Log.Warning("macOS Input Monitoring event tap 创建失败");
-                return;
-            }
-
-            source = Native.CFMachPortCreateRunLoopSource(0, _eventTap, 0);
-            if (source == 0) return;
-            _runLoop = Native.CFRunLoopGetCurrent();
-            Native.CFRunLoopAddSource(_runLoop, source, DefaultRunLoopMode);
-            Native.CGEventTapEnable(_eventTap, true);
-
-            while (!cancellationToken.IsCancellationRequested)
-                _ = Native.CFRunLoopRunInMode(DefaultRunLoopMode, 0.2, true);
-        }
-        catch (Exception exception)
-        {
-            Log.Warning(exception, "macOS Input Monitoring event tap 异常停止");
-        }
-        finally
-        {
-            if (_runLoop != 0 && source != 0)
-                Native.CFRunLoopRemoveSource(_runLoop, source, DefaultRunLoopMode);
-            if (source != 0) Native.CFRelease(source);
-            if (_eventTap != 0) Native.CFRelease(_eventTap);
-            _eventTap = 0;
-            _runLoop = 0;
-            if (handle.IsAllocated) handle.Free();
-        }
+        lock (_gate)
+            if (!ReferenceEquals(_session, session) || session.Thread.IsStopping) return;
+        Observation?.Invoke(observation);
     }
 
-    private static nint HandleEvent(
-        nint proxy,
-        uint eventType,
-        nint eventReference,
-        nint userInfo)
+    private void PublishFailure(Session session, Exception error)
     {
-        try
+        lock (_gate)
+            if (!ReferenceEquals(_session, session)) return;
+        Failed?.Invoke(error);
+    }
+
+    private sealed class Session
+    {
+        private readonly MacInputMonitoringNative _owner;
+        private nint _eventTap;
+        private nint _runLoop;
+        public ObservationThread Thread { get; }
+        public Session(MacInputMonitoringNative owner)
         {
-            var handle = GCHandle.FromIntPtr(userInfo);
-            if (handle.Target is not MacInputMonitoringNative instance)
-                return eventReference;
+            _owner = owner;
+            Thread = new ObservationThread("Heartbeat macOS Input Monitoring", RunEventLoop, error => owner.PublishFailure(this, error));
+        }
 
-            if (eventType is TapDisabledByTimeout or TapDisabledByUserInput)
+        private void RunEventLoop(CancellationToken cancellationToken)
+        {
+            var handle = GCHandle.Alloc(this);
+            var source = nint.Zero;
+            try
             {
-                if (instance._eventTap != 0)
-                    Native.CGEventTapEnable(instance._eventTap, true);
-                return eventReference;
+                _eventTap = Native.CGEventTapCreate(
+                    SessionEventTap,
+                    HeadInsertEventTap,
+                    ListenOnly,
+                    EventMask,
+                    Callback,
+                    GCHandle.ToIntPtr(handle));
+                if (_eventTap == 0)
+                {
+                    throw new InvalidOperationException("macOS Input Monitoring event tap 创建失败");
+                }
+
+                source = Native.CFMachPortCreateRunLoopSource(0, _eventTap, 0);
+                if (source == 0) throw new InvalidOperationException("macOS Input Monitoring source 创建失败");
+                _runLoop = Native.CFRunLoopGetCurrent();
+                Native.CFRunLoopAddSource(_runLoop, source, DefaultRunLoopMode);
+                Native.CGEventTapEnable(_eventTap, true);
+
+                while (!cancellationToken.IsCancellationRequested)
+                    _ = Native.CFRunLoopRunInMode(DefaultRunLoopMode, 0.2, true);
             }
-
-            var keyCode = Native.CGEventGetIntegerValueField(eventReference, KeyboardEventKeycode);
-            var mouseButton = Native.CGEventGetIntegerValueField(eventReference, MouseEventButtonNumber);
-            var lineScroll = Native.CGEventGetIntegerValueField(
-                eventReference,
-                ScrollWheelEventDeltaAxis1);
-            var continuous = Native.CGEventGetIntegerValueField(
-                eventReference,
-                ScrollWheelEventIsContinuous) != 0;
-            var pointScroll = Native.CGEventGetIntegerValueField(
-                eventReference,
-                ScrollWheelEventPointDeltaAxis1);
-            var scrollDelta = MacInputNativeEventTranslator.NormalizeScrollDelta(
-                continuous,
-                lineScroll,
-                pointScroll);
-            if (MacInputNativeEventTranslator.TryTranslate(
-                eventType,
-                keyCode,
-                mouseButton,
-                scrollDelta,
-                out var observation))
+            catch (Exception exception)
             {
-                instance.Observation?.Invoke(observation);
+                Log.Warning(exception, "macOS Input Monitoring event tap 异常停止");
+                throw;
+            }
+            finally
+            {
+                if (_runLoop != 0 && source != 0)
+                    Native.CFRunLoopRemoveSource(_runLoop, source, DefaultRunLoopMode);
+                if (source != 0) Native.CFRelease(source);
+                if (_eventTap != 0) Native.CFRelease(_eventTap);
+                _eventTap = 0;
+                _runLoop = 0;
+                if (handle.IsAllocated) handle.Free();
             }
         }
-        catch (Exception exception)
+
+        internal static nint HandleEvent(
+            nint proxy,
+            uint eventType,
+            nint eventReference,
+            nint userInfo)
         {
-            Log.Error(exception, "macOS Input Monitoring 回调异常");
+            try
+            {
+                var handle = GCHandle.FromIntPtr(userInfo);
+                if (handle.Target is not Session instance)
+                    return eventReference;
+
+                if (instance.Thread.IsStopping) return eventReference;
+
+                if (eventType is TapDisabledByTimeout or TapDisabledByUserInput)
+                {
+                    if (instance._eventTap != 0)
+                        Native.CGEventTapEnable(instance._eventTap, true);
+                    return eventReference;
+                }
+
+                var keyCode = Native.CGEventGetIntegerValueField(eventReference, KeyboardEventKeycode);
+                var mouseButton = Native.CGEventGetIntegerValueField(eventReference, MouseEventButtonNumber);
+                var lineScroll = Native.CGEventGetIntegerValueField(
+                    eventReference,
+                    ScrollWheelEventDeltaAxis1);
+                var continuous = Native.CGEventGetIntegerValueField(
+                    eventReference,
+                    ScrollWheelEventIsContinuous) != 0;
+                var pointScroll = Native.CGEventGetIntegerValueField(
+                    eventReference,
+                    ScrollWheelEventPointDeltaAxis1);
+                var scrollDelta = MacInputNativeEventTranslator.NormalizeScrollDelta(
+                    continuous,
+                    lineScroll,
+                    pointScroll);
+                if (MacInputNativeEventTranslator.TryTranslate(
+                    eventType,
+                    keyCode,
+                    mouseButton,
+                    scrollDelta,
+                    out var observation))
+                {
+                    instance._owner.Publish(instance, observation);
+                }
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "macOS Input Monitoring 回调异常");
+            }
+            return eventReference;
         }
-        return eventReference;
+
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
+        lock (_gate) _disposed = true;
         StopListening();
-        _disposed = true;
         GC.SuppressFinalize(this);
     }
 

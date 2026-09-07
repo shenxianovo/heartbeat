@@ -30,6 +30,7 @@ public readonly record struct MacInputObservation(MacInputObservationKind Kind, 
 
 public interface IMacInputMonitoringNative
 {
+    event Action<Exception>? Failed;
     event Action<MacInputObservation>? Observation;
     bool IsAvailable { get; }
     bool IsAuthorized { get; }

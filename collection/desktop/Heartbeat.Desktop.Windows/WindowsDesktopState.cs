@@ -16,14 +16,17 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
     private readonly IAutoStartService _loginStart;
     private readonly IClientCompatibilityStatus _compatibility;
     private readonly IUploadStatus _uploads;
+    private readonly InputObservationStatus _input;
 
     public WindowsDesktopState(
         ConfigManager config,
         ICollectionStatus collection,
         IAutoStartService loginStart,
         IClientCompatibilityStatus compatibility,
-        IUploadStatus uploads)
+        IUploadStatus uploads, InputObservationStatus? input = null)
     {
+        _input = input ?? new InputObservationStatus();
+        _input.Changed += Publish;
         _config = config;
         _collection = collection;
         _loginStart = loginStart;
@@ -118,12 +121,11 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
                     CapabilityAvailability.Available),
                 [SystemCapability.InteractionSignal] = new(
                     config.InteractionSignalEnabled,
-                    config.WindowActivityCollectionEnabled
-                        ? CapabilityAvailability.Available
-                        : CapabilityAvailability.Paused),
+                    !config.WindowActivityCollectionEnabled ? CapabilityAvailability.Paused
+                        : _input.IsAvailable ? CapabilityAvailability.Available : CapabilityAvailability.Unavailable),
                 [SystemCapability.InputEventRecording] = new(
                     config.InputEventRecordingEnabled,
-                    CapabilityAvailability.Available),
+                    _input.IsAvailable ? CapabilityAvailability.Available : CapabilityAvailability.Unavailable),
             }));
     }
 
@@ -144,5 +146,6 @@ public sealed class WindowsDesktopState : IDesktopState, IDisposable
         _collection.CurrentActivityChanged -= HandleCurrentActivityChanged;
         _compatibility.Changed -= HandleCompatibilityChanged;
         _uploads.Changed -= HandleUploadChanged;
+        _input.Changed -= Publish;
     }
 }

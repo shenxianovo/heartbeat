@@ -142,6 +142,46 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         Assert.Contains("Privacy_Accessibility", Assert.Single(command.Arguments));
     }
 
+    [Fact]
+    public void FailedEnable_LastCapabilityNotificationMatchesUnavailableState()
+    {
+        var config = new MacConfigManager(new MacAgentPaths(_root));
+        var native = new FakeNative { IsProcessTrusted = true, StartFailure = new IOException("AX start failed") };
+        using var events = new MacAccessibilityEvents(config, native, new FakeCommandRunner());
+        var states = new List<MacAccessibilityCapabilityState>();
+        events.CapabilityChanged += states.Add;
+        events.Start();
+        events.SetCurrentApplication(99);
+
+        events.SetEnabledFromUser(true);
+
+        Assert.Equal(MacAccessibilityCapabilityState.Unavailable, events.CapabilityState);
+        Assert.Equal(events.CapabilityState, states.Last());
+    }
+
+    [Fact]
+    public void SwitchingApplicationAfterNativeFailure_ImmediatelyRecoversCapabilityAndObservations()
+    {
+        var config = new MacConfigManager(new MacAgentPaths(_root));
+        config.Update(value => value.WindowTitleObservationEnabled = true);
+        var native = new FakeNative { IsProcessTrusted = true, FocusedWindowTitle = "New App" };
+        using var events = new MacAccessibilityEvents(config, native, new FakeCommandRunner());
+        var received = new List<MacAccessibilityObservation>();
+        events.Observation += received.Add;
+        events.Start();
+        events.SetCurrentApplication(99);
+        native.RaiseFailure(new InvalidOperationException("Application observation failed"));
+        Assert.Equal(MacAccessibilityCapabilityState.Unavailable, events.CapabilityState);
+
+        events.SetCurrentApplication(100);
+        native.Raise(new MacAccessibilityObservation(MacAccessibilityObservationKind.TitleChanged, "New App", 100));
+
+        Assert.Equal(MacAccessibilityCapabilityState.Available, events.CapabilityState);
+        Assert.Equal("New App", events.CurrentTitle);
+        Assert.Equal(100, native.LastObservedProcessIdentifier);
+        Assert.Single(received);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
@@ -151,6 +191,8 @@ public sealed class MacAccessibilityEventsTests : IDisposable
     private sealed class FakeNative : IMacAccessibilityNative
     {
         public event Action<MacAccessibilityObservation>? Observation;
+        public event Action<Exception>? Failed;
+        public void RaiseFailure(Exception error) => Failed?.Invoke(error);
         public bool IsAvailable { get; set; } = true;
         public bool IsProcessTrusted { get; set; }
         public string? FocusedWindowTitle { get; set; }
@@ -158,10 +200,12 @@ public sealed class MacAccessibilityEventsTests : IDisposable
         public int ObserveCount { get; private set; }
         public int StopCount { get; private set; }
         public int LastObservedProcessIdentifier { get; private set; }
+        public Exception? StartFailure { get; init; }
         public void RequestProcessTrust() => RequestCount++;
         public string? ReadFocusedWindowTitle(int processIdentifier) => FocusedWindowTitle;
         public void ObserveApplication(int processIdentifier)
         {
+            if (StartFailure is { } failure) throw failure;
             ObserveCount++;
             LastObservedProcessIdentifier = processIdentifier;
         }

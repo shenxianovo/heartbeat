@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Heartbeat.Collector.System.Observations;
 using Heartbeat.Desktop.Mac.Observations;
 using Serilog;
 
@@ -16,19 +17,12 @@ public sealed class MacAccessibilityNative : IMacAccessibilityNative, IDisposabl
         CoreFoundation.CreateString("AXFocusedWindowChanged");
     private static readonly nint TitleChangedNotification = CoreFoundation.CreateString("AXTitleChanged");
     private static readonly nint DefaultRunLoopMode = CoreFoundation.CreateString("kCFRunLoopDefaultMode");
-    private static readonly AxObserverCallback ObserverCallback = HandleNotification;
-    private static readonly Dictionary<nint, WeakReference<MacAccessibilityNative>> Instances = [];
+    private static readonly AxObserverCallback ObserverCallback = Session.HandleNotification;
+    private static readonly Dictionary<nint, WeakReference<Session>> Instances = [];
     private static readonly object InstancesGate = new();
 
     private readonly object _gate = new();
-    private CancellationTokenSource? _threadCts;
-    private Thread? _thread;
-    private int _desiredProcessIdentifier;
-    private nint _observer;
-    private nint _applicationElement;
-    private nint _focusedWindowElement;
-    private nint _runLoop;
-    private int _observedProcessIdentifier;
+    private Session? _session;
     private bool _disposed;
 
     public MacAccessibilityNative()
@@ -38,6 +32,7 @@ public sealed class MacAccessibilityNative : IMacAccessibilityNative, IDisposabl
     }
 
     public event Action<MacAccessibilityObservation>? Observation;
+    public event Action<Exception>? Failed;
 
     public bool IsAvailable => OperatingSystem.IsMacOS();
     public bool IsProcessTrusted => Native.AXIsProcessTrusted();
@@ -69,7 +64,7 @@ public sealed class MacAccessibilityNative : IMacAccessibilityNative, IDisposabl
         var window = nint.Zero;
         try
         {
-            return ReadFocusedWindowTitle(application, out window);
+            return Session.ReadFocusedWindowTitle(application, out window);
         }
         finally
         {
@@ -80,243 +75,275 @@ public sealed class MacAccessibilityNative : IMacAccessibilityNative, IDisposabl
 
     public void ObserveApplication(int processIdentifier)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
         if (processIdentifier <= 0) return;
         lock (_gate)
         {
-            _desiredProcessIdentifier = processIdentifier;
-            if (_thread is { IsAlive: true }) return;
-            _threadCts = new CancellationTokenSource();
-            _thread = new Thread(() => RunObserverLoop(_threadCts.Token))
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_session is { } current && !current.Thread.Completion.IsCompleted)
             {
-                IsBackground = true,
-                Name = "Heartbeat macOS Accessibility"
-            };
-            _thread.Start();
+                if (current.Thread.IsStopping)
+                    throw new InvalidOperationException("The previous Accessibility session is still stopping.");
+                current.DesiredProcessIdentifier = processIdentifier;
+                return;
+            }
+            _session = new Session(this) { DesiredProcessIdentifier = processIdentifier };
+            _session.Thread.Start();
         }
     }
 
     public void StopObserving()
     {
-        Thread? thread;
+        Session? session;
+        lock (_gate) session = _session;
+        session?.Thread.Stop(TimeSpan.FromSeconds(2));
         lock (_gate)
-        {
-            _desiredProcessIdentifier = 0;
-            _threadCts?.Cancel();
-            thread = _thread;
-            if (_runLoop != 0)
-                Native.CFRunLoopStop(_runLoop);
-        }
-
-        if (thread != null && thread != Thread.CurrentThread)
-            thread.Join(TimeSpan.FromSeconds(2));
-
-        lock (_gate)
-        {
-            _thread = null;
-            _threadCts?.Dispose();
-            _threadCts = null;
-        }
+            if (ReferenceEquals(_session, session) && session?.Thread.Completion.IsCompleted == true)
+                _session = null;
     }
 
-    private void RunObserverLoop(CancellationToken cancellationToken)
+    private void Publish(Session session, MacAccessibilityObservation observation)
     {
-        var attachedProcessIdentifier = 0;
-        _runLoop = Native.CFRunLoopGetCurrent();
-        try
+        lock (_gate)
+            if (!ReferenceEquals(_session, session) || session.Thread.IsStopping) return;
+        Observation?.Invoke(observation);
+    }
+
+    private void PublishFailure(Session session, Exception error)
+    {
+        lock (_gate)
+            if (!ReferenceEquals(_session, session)) return;
+        Failed?.Invoke(error);
+    }
+
+    private sealed class Session
+    {
+        private readonly MacAccessibilityNative _owner;
+        private nint _observer;
+        private nint _applicationElement;
+        private nint _focusedWindowElement;
+        private nint _runLoop;
+        private int _observedProcessIdentifier;
+        private int _desiredProcessIdentifier;
+        public int DesiredProcessIdentifier
         {
-            while (!cancellationToken.IsCancellationRequested)
+            get => Volatile.Read(ref _desiredProcessIdentifier);
+            set => Volatile.Write(ref _desiredProcessIdentifier, value);
+        }
+        public ObservationThread Thread { get; }
+        public Session(MacAccessibilityNative owner)
+        {
+            _owner = owner;
+            Thread = new ObservationThread("Heartbeat macOS Accessibility", RunObserverLoop, error => owner.PublishFailure(this, error));
+        }
+
+        private void RunObserverLoop(CancellationToken cancellationToken)
+        {
+            var attachedProcessIdentifier = 0;
+            _runLoop = Native.CFRunLoopGetCurrent();
+            try
             {
-                int desired;
-                lock (_gate)
-                    desired = _desiredProcessIdentifier;
-
-                if (desired != attachedProcessIdentifier)
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    DetachObserver();
-                    attachedProcessIdentifier = 0;
-                    if (desired > 0 && IsProcessTrusted && AttachObserver(desired))
-                        attachedProcessIdentifier = desired;
-                }
+                    var desired = DesiredProcessIdentifier;
 
-                _ = Native.CFRunLoopRunInMode(DefaultRunLoopMode, 0.2, true);
+                    if (desired != attachedProcessIdentifier)
+                    {
+                        DetachObserver();
+                        attachedProcessIdentifier = 0;
+                        if (desired > 0 && Native.AXIsProcessTrusted() && AttachObserver(desired))
+                            attachedProcessIdentifier = desired;
+                    }
+
+                    _ = Native.CFRunLoopRunInMode(DefaultRunLoopMode, 0.2, true);
+                }
+            }
+            catch (Exception exception)
+            {
+                Log.Warning(exception, "macOS Accessibility observer 异常停止");
+                throw;
+            }
+            finally
+            {
+                DetachObserver();
+                _runLoop = 0;
             }
         }
-        catch (Exception exception)
+
+        private bool AttachObserver(int processIdentifier)
         {
-            Log.Warning(exception, "macOS Accessibility observer 异常停止");
+            _applicationElement = Native.AXUIElementCreateApplication(processIdentifier);
+            if (_applicationElement == 0) throw new InvalidOperationException("AX application creation failed.");
+
+            var error = Native.AXObserverCreate(processIdentifier, ObserverCallback, out _observer);
+            if (error != 0 || _observer == 0)
+            {
+                DetachObserver();
+                throw new InvalidOperationException($"AX observer creation failed: {error}.");
+            }
+
+            lock (InstancesGate)
+                Instances[_observer] = new WeakReference<Session>(this);
+
+            var source = Native.AXObserverGetRunLoopSource(_observer);
+            Native.CFRunLoopAddSource(_runLoop, source, DefaultRunLoopMode);
+            RegisterNotification(
+                _observer,
+                _applicationElement,
+                FocusedWindowChangedNotification,
+                0);
+            ReplaceFocusedWindow(emitObservation: false);
+            _observedProcessIdentifier = processIdentifier;
+            return true;
         }
-        finally
+
+        private void DetachObserver()
         {
-            DetachObserver();
-            _runLoop = 0;
+            if (_observer != 0)
+            {
+                if (_focusedWindowElement != 0)
+                    _ = Native.AXObserverRemoveNotification(
+                        _observer,
+                        _focusedWindowElement,
+                        TitleChangedNotification);
+                if (_applicationElement != 0)
+                    _ = Native.AXObserverRemoveNotification(
+                        _observer,
+                        _applicationElement,
+                        FocusedWindowChangedNotification);
+
+                var source = Native.AXObserverGetRunLoopSource(_observer);
+                if (_runLoop != 0 && source != 0)
+                    Native.CFRunLoopRemoveSource(_runLoop, source, DefaultRunLoopMode);
+                lock (InstancesGate)
+                    Instances.Remove(_observer);
+            }
+
+            if (_focusedWindowElement != 0) CoreFoundation.Release(_focusedWindowElement);
+            if (_observer != 0) CoreFoundation.Release(_observer);
+            if (_applicationElement != 0) CoreFoundation.Release(_applicationElement);
+            _focusedWindowElement = 0;
+            _observer = 0;
+            _applicationElement = 0;
+            _observedProcessIdentifier = 0;
         }
-    }
 
-    private bool AttachObserver(int processIdentifier)
-    {
-        _applicationElement = Native.AXUIElementCreateApplication(processIdentifier);
-        if (_applicationElement == 0) return false;
-
-        var error = Native.AXObserverCreate(processIdentifier, ObserverCallback, out _observer);
-        if (error != 0 || _observer == 0)
+        private static void RegisterNotification(nint observer, nint element, nint notification, nint context)
         {
-            DetachObserver();
-            return false;
+            var error = Native.AXObserverAddNotification(observer, element, notification, context);
+            if (error != 0) throw new InvalidOperationException($"AX notification registration failed: {error}.");
         }
 
-        lock (InstancesGate)
-            Instances[_observer] = new WeakReference<MacAccessibilityNative>(this);
-
-        var source = Native.AXObserverGetRunLoopSource(_observer);
-        Native.CFRunLoopAddSource(_runLoop, source, DefaultRunLoopMode);
-        _ = Native.AXObserverAddNotification(
-            _observer,
-            _applicationElement,
-            FocusedWindowChangedNotification,
-            0);
-        ReplaceFocusedWindow(emitObservation: false);
-        _observedProcessIdentifier = processIdentifier;
-        return true;
-    }
-
-    private void DetachObserver()
-    {
-        if (_observer != 0)
+        private void ReplaceFocusedWindow(bool emitObservation)
         {
+            if (_observer == 0 || _applicationElement == 0) return;
+
             if (_focusedWindowElement != 0)
+            {
                 _ = Native.AXObserverRemoveNotification(
                     _observer,
                     _focusedWindowElement,
                     TitleChangedNotification);
-            if (_applicationElement != 0)
-                _ = Native.AXObserverRemoveNotification(
+                CoreFoundation.Release(_focusedWindowElement);
+                _focusedWindowElement = 0;
+            }
+
+            var title = ReadFocusedWindowTitle(_applicationElement, out var focusedWindow);
+            _focusedWindowElement = focusedWindow;
+            if (_focusedWindowElement != 0)
+                RegisterNotification(
                     _observer,
-                    _applicationElement,
-                    FocusedWindowChangedNotification);
+                    _focusedWindowElement,
+                    TitleChangedNotification,
+                    0);
 
-            var source = Native.AXObserverGetRunLoopSource(_observer);
-            if (_runLoop != 0 && source != 0)
-                Native.CFRunLoopRemoveSource(_runLoop, source, DefaultRunLoopMode);
+            if (emitObservation)
+                _owner.Publish(this, new MacAccessibilityObservation(
+                    MacAccessibilityObservationKind.FocusedWindowChanged,
+                    title,
+                    _observedProcessIdentifier));
+        }
+
+        internal static string? ReadFocusedWindowTitle(nint application, out nint focusedWindow)
+        {
+            focusedWindow = 0;
+            var error = Native.AXUIElementCopyAttributeValue(
+                application,
+                FocusedWindowAttribute,
+                out focusedWindow);
+            if (error != 0 || focusedWindow == 0)
+                return null;
+
+            var titleValue = nint.Zero;
+            try
+            {
+                error = Native.AXUIElementCopyAttributeValue(focusedWindow, TitleAttribute, out titleValue);
+                return error == 0 && titleValue != 0
+                    ? CoreFoundation.ReadString(titleValue)
+                    : null;
+            }
+            finally
+            {
+                if (titleValue != 0) CoreFoundation.Release(titleValue);
+            }
+        }
+
+        internal static void HandleNotification(
+            nint observer,
+            nint element,
+            nint notification,
+            nint refcon)
+        {
+            Session? instance = null;
             lock (InstancesGate)
-                Instances.Remove(_observer);
+            {
+                if (Instances.TryGetValue(observer, out var weak))
+                    weak.TryGetTarget(out instance);
+            }
+            if (instance == null || instance.Thread.IsStopping) return;
+
+            try
+            {
+                var name = CoreFoundation.ReadString(notification);
+                if (name == "AXFocusedWindowChanged")
+                {
+                    instance.ReplaceFocusedWindow(emitObservation: true);
+                }
+                else if (name == "AXTitleChanged")
+                {
+                    var title = instance._focusedWindowElement == 0
+                        ? null
+                        : ReadTitle(instance._focusedWindowElement);
+                    instance._owner.Publish(instance, new MacAccessibilityObservation(
+                        MacAccessibilityObservationKind.TitleChanged,
+                        title,
+                        instance._observedProcessIdentifier));
+                }
+            }
+            catch (Exception error) { instance.Thread.Fail(error); }
         }
 
-        if (_focusedWindowElement != 0) CoreFoundation.Release(_focusedWindowElement);
-        if (_observer != 0) CoreFoundation.Release(_observer);
-        if (_applicationElement != 0) CoreFoundation.Release(_applicationElement);
-        _focusedWindowElement = 0;
-        _observer = 0;
-        _applicationElement = 0;
-        _observedProcessIdentifier = 0;
-    }
-
-    private void ReplaceFocusedWindow(bool emitObservation)
-    {
-        if (_observer == 0 || _applicationElement == 0) return;
-
-        if (_focusedWindowElement != 0)
+        private static string? ReadTitle(nint element)
         {
-            _ = Native.AXObserverRemoveNotification(
-                _observer,
-                _focusedWindowElement,
-                TitleChangedNotification);
-            CoreFoundation.Release(_focusedWindowElement);
-            _focusedWindowElement = 0;
+            var titleValue = nint.Zero;
+            try
+            {
+                var error = Native.AXUIElementCopyAttributeValue(element, TitleAttribute, out titleValue);
+                return error == 0 && titleValue != 0
+                    ? CoreFoundation.ReadString(titleValue)
+                    : null;
+            }
+            finally
+            {
+                if (titleValue != 0) CoreFoundation.Release(titleValue);
+            }
         }
 
-        var title = ReadFocusedWindowTitle(_applicationElement, out var focusedWindow);
-        _focusedWindowElement = focusedWindow;
-        if (_focusedWindowElement != 0)
-            _ = Native.AXObserverAddNotification(
-                _observer,
-                _focusedWindowElement,
-                TitleChangedNotification,
-                0);
-
-        if (emitObservation)
-            Observation?.Invoke(new MacAccessibilityObservation(
-                MacAccessibilityObservationKind.FocusedWindowChanged,
-                title,
-                _observedProcessIdentifier));
-    }
-
-    private static string? ReadFocusedWindowTitle(nint application, out nint focusedWindow)
-    {
-        focusedWindow = 0;
-        var error = Native.AXUIElementCopyAttributeValue(
-            application,
-            FocusedWindowAttribute,
-            out focusedWindow);
-        if (error != 0 || focusedWindow == 0)
-            return null;
-
-        var titleValue = nint.Zero;
-        try
-        {
-            error = Native.AXUIElementCopyAttributeValue(focusedWindow, TitleAttribute, out titleValue);
-            return error == 0 && titleValue != 0
-                ? CoreFoundation.ReadString(titleValue)
-                : null;
-        }
-        finally
-        {
-            if (titleValue != 0) CoreFoundation.Release(titleValue);
-        }
-    }
-
-    private static void HandleNotification(
-        nint observer,
-        nint element,
-        nint notification,
-        nint refcon)
-    {
-        MacAccessibilityNative? instance = null;
-        lock (InstancesGate)
-        {
-            if (Instances.TryGetValue(observer, out var weak))
-                weak.TryGetTarget(out instance);
-        }
-        if (instance == null) return;
-
-        var name = CoreFoundation.ReadString(notification);
-        if (name == "AXFocusedWindowChanged")
-        {
-            instance.ReplaceFocusedWindow(emitObservation: true);
-        }
-        else if (name == "AXTitleChanged")
-        {
-            var title = instance._focusedWindowElement == 0
-                ? null
-                : ReadTitle(instance._focusedWindowElement);
-            instance.Observation?.Invoke(new MacAccessibilityObservation(
-                MacAccessibilityObservationKind.TitleChanged,
-                title,
-                instance._observedProcessIdentifier));
-        }
-    }
-
-    private static string? ReadTitle(nint element)
-    {
-        var titleValue = nint.Zero;
-        try
-        {
-            var error = Native.AXUIElementCopyAttributeValue(element, TitleAttribute, out titleValue);
-            return error == 0 && titleValue != 0
-                ? CoreFoundation.ReadString(titleValue)
-                : null;
-        }
-        finally
-        {
-            if (titleValue != 0) CoreFoundation.Release(titleValue);
-        }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
+        lock (_gate) _disposed = true;
         StopObserving();
-        _disposed = true;
         GC.SuppressFinalize(this);
     }
 

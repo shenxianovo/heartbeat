@@ -1,4 +1,5 @@
 using Heartbeat.Desktop.Mac.Configuration;
+using Heartbeat.Collector.System.Observations;
 using Heartbeat.Desktop.Mac.Native;
 using Serilog;
 
@@ -25,6 +26,7 @@ public readonly record struct MacAccessibilityObservation(
 
 public interface IMacAccessibilityNative
 {
+    event Action<Exception>? Failed;
     event Action<MacAccessibilityObservation>? Observation;
 
     bool IsAvailable { get; }
@@ -56,11 +58,21 @@ public interface IMacAccessibilityEvents
 /// Accessibility 能力的生命周期边界。配置启用与 TCC 授权分开表示；启动和普通配置更新
 /// 只检查权限，只有显式用户动作才请求权限或打开系统设置。
 /// </summary>
-public sealed class MacAccessibilityEvents(
-    MacConfigManager config,
-    IMacAccessibilityNative native,
-    IMacCommandRunner commandRunner) : IMacAccessibilityEvents, IDisposable
+public sealed class MacAccessibilityEvents : IMacAccessibilityEvents, IDisposable
 {
+    private readonly MacConfigManager _config;
+    private readonly IMacAccessibilityNative _native;
+    private readonly IMacCommandRunner _commandRunner;
+    private readonly ObservationReconciler _transitions;
+    public MacAccessibilityEvents(MacConfigManager config, IMacAccessibilityNative native,
+        IMacCommandRunner commandRunner)
+    {
+        _config = config;
+        _native = native;
+        _commandRunner = commandRunner;
+        _capabilityState = ComputeInitialState(config, native);
+        _transitions = new ObservationReconciler(ReconcileObservation);
+    }
     private static readonly TimeSpan PermissionPollInterval = TimeSpan.FromSeconds(1);
     private const string AccessibilitySettingsUrl =
         "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
@@ -70,12 +82,14 @@ public sealed class MacAccessibilityEvents(
     private Task? _pollTask;
     private int _currentProcessIdentifier;
     private bool _started;
-    private MacAccessibilityCapabilityState _capabilityState = ComputeInitialState(config, native);
+    private bool _nativeFailed;
+    private Task? _stopTask;
+    private MacAccessibilityCapabilityState _capabilityState;
 
     public event Action<MacAccessibilityObservation>? Observation;
     public event Action<MacAccessibilityCapabilityState>? CapabilityChanged;
 
-    public bool Enabled => config.Current.WindowTitleObservationEnabled;
+    public bool Enabled => _config.Current.WindowTitleObservationEnabled;
 
     public MacAccessibilityCapabilityState CapabilityState
     {
@@ -107,69 +121,81 @@ public sealed class MacAccessibilityEvents(
         lock (_gate)
         {
             if (_started) return;
+            if (_stopTask is { IsCompleted: false })
+                throw new InvalidOperationException("Accessibility observation is still stopping.");
+            _stopTask?.GetAwaiter().GetResult();
+            _stopTask = null;
             _started = true;
+            _native.Observation += OnNativeObservation;
+            _native.Failed += OnNativeFailure;
+            _config.ConfigChanged += OnConfigChanged;
+            var polling = new CancellationTokenSource();
+            _pollCts = polling;
+            _pollTask = Task.Run(() => PollPermissionAsync(polling.Token), CancellationToken.None);
         }
-
-        native.Observation += OnNativeObservation;
         RefreshCapability();
-        _pollCts?.Dispose();
-        _pollCts = new CancellationTokenSource();
-        _pollTask = Task.Run(() => PollPermissionAsync(_pollCts.Token), CancellationToken.None);
     }
 
     public void Stop()
     {
+        TaskCompletionSource? completion = null;
+        Task stopping;
         lock (_gate)
         {
-            if (!_started) return;
-            _started = false;
+            if (_stopTask is null)
+            {
+                _started = false;
+                completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _stopTask = completion.Task;
+                _config.ConfigChanged -= OnConfigChanged;
+                _native.Observation -= OnNativeObservation;
+                _native.Failed -= OnNativeFailure;
+            }
+            stopping = _stopTask;
         }
-
-        _pollCts?.Cancel();
-        if (_pollTask != null && _pollTask.Id != Task.CurrentId)
+        if (completion is not null)
         {
             try
             {
-                _pollTask.Wait(TimeSpan.FromSeconds(2));
+                _pollCts?.Cancel();
+                try { _transitions.Reconcile().GetAwaiter().GetResult(); }
+                finally
+                {
+                    try { _pollTask?.GetAwaiter().GetResult(); }
+                    finally { _pollCts?.Dispose(); }
+                }
+                completion.SetResult();
             }
-            catch (AggregateException exception) when (
-                exception.InnerExceptions.All(inner => inner is OperationCanceledException))
-            {
-                // 正常停止
-            }
+            catch (Exception exception) { completion.SetException(exception); }
         }
-        _pollTask = null;
-        native.Observation -= OnNativeObservation;
-        native.StopObserving();
+        stopping.GetAwaiter().GetResult();
     }
 
     public void SetCurrentApplication(int processIdentifier)
     {
-        var shouldObserve = false;
         lock (_gate)
         {
+            if (_currentProcessIdentifier != processIdentifier) _nativeFailed = false;
             _currentProcessIdentifier = processIdentifier;
-            shouldObserve = _started
-                && processIdentifier > 0
-                && _capabilityState == MacAccessibilityCapabilityState.Available;
         }
-
-        if (shouldObserve)
-            native.ObserveApplication(processIdentifier);
+        RefreshCapability();
     }
+
+    private void OnConfigChanged(MacAgentConfig _) => RefreshCapability();
 
     public void SetEnabledFromUser(bool enabled)
     {
-        config.Update(value => value.WindowTitleObservationEnabled = enabled);
+        lock (_gate) _nativeFailed = false;
+        _config.Update(value => value.WindowTitleObservationEnabled = enabled);
         if (enabled)
-            native.RequestProcessTrust();
+            _native.RequestProcessTrust();
         RefreshCapability();
     }
 
     public void OpenPermissionSettingsFromUser()
     {
         if (!Enabled) return;
-        var result = commandRunner.Run("/usr/bin/open", [AccessibilitySettingsUrl]);
+        var result = _commandRunner.Run("/usr/bin/open", [AccessibilitySettingsUrl]);
         if (result.ExitCode != 0)
             Log.Warning("打开 macOS Accessibility 设置失败: {Error}", result.StandardError);
         RefreshCapability();
@@ -195,23 +221,17 @@ public sealed class MacAccessibilityEvents(
     {
         MacAccessibilityCapabilityState previous;
         MacAccessibilityCapabilityState current;
-        int processIdentifier;
-        bool started;
-
         lock (_gate)
         {
             previous = _capabilityState;
             current = ComputeState();
             _capabilityState = current;
-            processIdentifier = _currentProcessIdentifier;
-            started = _started;
         }
 
-        if (started && current == MacAccessibilityCapabilityState.Available && processIdentifier > 0)
-            native.ObserveApplication(processIdentifier);
-        else if (current != MacAccessibilityCapabilityState.Available)
-            native.StopObserving();
+        _ = ObserveTransitionAsync(_transitions.Reconcile());
 
+        // A synchronous transition may have reported a native failure. Publish its resulting state.
+        current = CapabilityState;
         if (previous != current)
         {
             Log.Information("macOS Accessibility 能力状态: {State}", current);
@@ -219,11 +239,42 @@ public sealed class MacAccessibilityEvents(
         }
     }
 
+    private void ReconcileObservation()
+    {
+        try { ApplyObservationState(); }
+        catch
+        {
+            lock (_gate) { _nativeFailed = true; _capabilityState = MacAccessibilityCapabilityState.Unavailable; }
+            CapabilityChanged?.Invoke(MacAccessibilityCapabilityState.Unavailable);
+            throw;
+        }
+    }
+
+    private void ApplyObservationState()
+    {
+        int processIdentifier;
+        bool started;
+        lock (_gate) { processIdentifier = _currentProcessIdentifier; started = _started; }
+        if (started && ComputeState() == MacAccessibilityCapabilityState.Available && processIdentifier > 0)
+            _native.ObserveApplication(processIdentifier);
+        else
+            _native.StopObserving();
+    }
+
+    private async Task ObserveTransitionAsync(Task transition)
+    {
+        try { await transition; }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "macOS Accessibility capability transition failed");
+        }
+    }
+
     private MacAccessibilityCapabilityState ComputeState()
     {
         if (!Enabled) return MacAccessibilityCapabilityState.Disabled;
-        if (!native.IsAvailable) return MacAccessibilityCapabilityState.Unavailable;
-        return native.IsProcessTrusted
+        if (_nativeFailed || !_native.IsAvailable) return MacAccessibilityCapabilityState.Unavailable;
+        return _native.IsProcessTrusted
             ? MacAccessibilityCapabilityState.Available
             : MacAccessibilityCapabilityState.PermissionRequired;
     }
@@ -245,13 +296,26 @@ public sealed class MacAccessibilityEvents(
     {
         try
         {
-            return native.ReadFocusedWindowTitle(processIdentifier);
+            return _native.ReadFocusedWindowTitle(processIdentifier);
         }
         catch (Exception exception)
         {
             Log.Debug(exception, "读取 macOS focused-window 标题失败");
             return null;
         }
+    }
+
+    private void OnNativeFailure(Exception exception)
+    {
+        lock (_gate)
+        {
+            if (!_started) return;
+            _nativeFailed = true;
+            _capabilityState = MacAccessibilityCapabilityState.Unavailable;
+        }
+        Log.Warning(exception, "macOS Accessibility observation failed");
+        _ = ObserveTransitionAsync(_transitions.Reconcile());
+        CapabilityChanged?.Invoke(MacAccessibilityCapabilityState.Unavailable);
     }
 
     private void OnNativeObservation(MacAccessibilityObservation observation)
@@ -272,7 +336,6 @@ public sealed class MacAccessibilityEvents(
     public void Dispose()
     {
         Stop();
-        _pollCts?.Dispose();
         GC.SuppressFinalize(this);
     }
 }

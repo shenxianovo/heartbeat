@@ -161,6 +161,7 @@ namespace Heartbeat.Desktop.Windows.Hosting
 
             // Input hook starts only after the system Activation has opened its Event Stream and
             // stops before that Activation drains.
+            services.AddSingleton<InputObservationStatus>();
             services.AddHostedService<InputEventCollector>();
 
             return services;

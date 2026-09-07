@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Heartbeat.Collector.System.Observations;
 
 namespace Heartbeat.Desktop.Windows.Utils
 {
@@ -16,6 +17,7 @@ namespace Heartbeat.Desktop.Windows.Utils
     /// </summary>
     public interface ILowLevelInputHook
     {
+        event Action<Exception>? Failed;
         event Action<WindowsNativeKeyObservation>? KeyDown;
         event Action<WindowsNativeKeyObservation>? KeyUp;
         event Action<short>? MouseButton;  // 1=左 2=右 3=中
@@ -24,10 +26,11 @@ namespace Heartbeat.Desktop.Windows.Utils
         void StopHook();
     }
 
-    public sealed class WindowsLowLevelInputHook : ILowLevelInputHook
+    public sealed class WindowsLowLevelInputHook : ILowLevelInputHook, IDisposable
     {
         // ── 事件 ──
         public event Action<WindowsNativeKeyObservation>? KeyDown;
+        public event Action<Exception>? Failed;
         public event Action<WindowsNativeKeyObservation>? KeyUp;
         public event Action<short>? MouseButton;
         public event Action<int>? Scroll;
@@ -63,6 +66,9 @@ namespace Heartbeat.Desktop.Windows.Utils
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetModuleHandle(string? lpModuleName);
+
+        [DllImport("user32.dll")]
+        private static extern bool PeekMessage(out MSG message, IntPtr window, uint min, uint max, uint remove);
 
         [DllImport("user32.dll")]
         private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint min, uint max);
@@ -112,120 +118,177 @@ namespace Heartbeat.Desktop.Windows.Utils
             public IntPtr dwExtraInfo;
         }
 
-        // 保持委托引用，防止 GC 回收
-        private HookProc? _keyboardProc;
-        private HookProc? _mouseProc;
-        private IntPtr _keyboardHook;
-        private IntPtr _mouseHook;
-        private uint _threadId;
-        private Thread? _thread;
+        private readonly object _gate = new();
+        private Session? _session;
+        private bool _disposed;
 
         public void StartHook()
         {
-            _thread = new Thread(() =>
+            lock (_gate)
             {
-                try { RunMessageLoop(); }
-                catch (Exception ex) { Serilog.Log.Error(ex, "低级输入钩子线程异常"); }
-            })
-            {
-                IsBackground = true,
-                Name = "InputHookThread"
-            };
-            _thread.Start();
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (_session is { } current && !current.Thread.Completion.IsCompleted)
+                {
+                    if (current.Thread.IsStopping)
+                        throw new InvalidOperationException("The previous input session is still stopping.");
+                    return;
+                }
+                _session = new Session(this);
+                _session.Thread.Start();
+            }
         }
 
         public void StopHook()
         {
-            if (_threadId != 0)
-                PostThreadMessage(_threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
-            _thread?.Join(TimeSpan.FromSeconds(3));
+            Session? session;
+            lock (_gate) session = _session;
+            session?.Thread.Stop(TimeSpan.FromSeconds(3));
+            lock (_gate)
+                if (ReferenceEquals(_session, session) && session?.Thread.Completion.IsCompleted == true)
+                    _session = null;
         }
 
-        /// <summary>安装钩子并阻塞运行消息循环（在自持线程上执行，低级钩子要求线程有消息泵）。</summary>
-        private void RunMessageLoop()
+        public void Dispose()
         {
-            _threadId = GetCurrentThreadId();
-            _keyboardProc = KeyboardCallback;
-            _mouseProc = MouseCallback;
+            lock (_gate) _disposed = true;
+            StopHook();
+        }
 
-            var hMod = GetModuleHandle(null);
-            _keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardProc, hMod, 0);
-            _mouseHook = SetWindowsHookEx(WH_MOUSE_LL, _mouseProc, hMod, 0);
+        private void PublishFailure(Session session, Exception error)
+        { if (Accepts(session)) Failed?.Invoke(error); }
 
-            int ret;
-            while ((ret = GetMessage(out MSG msg, IntPtr.Zero, 0, 0)) != 0)
+        private bool Accepts(Session session)
+        {
+            lock (_gate) return ReferenceEquals(_session, session) && !session.Thread.IsStopping;
+        }
+        private void PublishKeyDown(Session session, WindowsNativeKeyObservation value)
+        { if (Accepts(session)) KeyDown?.Invoke(value); }
+        private void PublishKeyUp(Session session, WindowsNativeKeyObservation value)
+        { if (Accepts(session)) KeyUp?.Invoke(value); }
+        private void PublishMouse(Session session, short value)
+        { if (Accepts(session)) MouseButton?.Invoke(value); }
+        private void PublishScroll(Session session, int value)
+        { if (Accepts(session)) Scroll?.Invoke(value); }
+
+        private sealed class Session
+        {
+            private readonly WindowsLowLevelInputHook _owner;
+            // Delegates and handles belong to this exact session until its thread finishes.
+            private HookProc? _keyboardProc;
+            private HookProc? _mouseProc;
+            private IntPtr _keyboardHook;
+            private IntPtr _mouseHook;
+            public ObservationThread Thread { get; }
+            public Session(WindowsLowLevelInputHook owner)
             {
-                if (ret == -1) break;
-                TranslateMessage(ref msg);
-                DispatchMessage(ref msg);
+                _owner = owner;
+                Thread = new ObservationThread("InputHookThread", RunMessageLoop, error =>
+                    owner.PublishFailure(this, error));
             }
 
-            if (_keyboardHook != IntPtr.Zero) UnhookWindowsHookEx(_keyboardHook);
-            if (_mouseHook != IntPtr.Zero) UnhookWindowsHookEx(_mouseHook);
-            _keyboardHook = IntPtr.Zero;
-            _mouseHook = IntPtr.Zero;
-        }
-
-        private IntPtr KeyboardCallback(int nCode, IntPtr wParam, IntPtr lParam)
-        {
-            // 回调内吞异常：异常若穿过 P/Invoke 边界，行为未定义且可能导致系统摘钩。
-            // 无论如何都要走到 CallNextHookEx，不破坏钩子链。
-            if (nCode >= 0)
+            /// <summary>安装钩子并阻塞运行消息循环（在自持线程上执行，低级钩子要求线程有消息泵）。</summary>
+            private void RunMessageLoop(CancellationToken stop)
             {
+                // Force creation of the queue before registering the stop signal. Register also
+                // observes cancellation that arrived before this thread was ready.
+                _ = PeekMessage(out _, IntPtr.Zero, 0, 0, 0);
+                var threadId = GetCurrentThreadId();
+                using var registration = stop.Register(() =>
+                    PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero));
                 try
                 {
-                    int msg = (int)wParam;
-                    var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-                    var observation = new WindowsNativeKeyObservation(
-                        data.vkCode,
-                        data.scanCode,
-                        (data.flags & LLKHF_EXTENDED) != 0);
-
-                    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
-                        KeyDown?.Invoke(observation);
-                    else if (msg == WM_KEYUP || msg == WM_SYSKEYUP)
-                        KeyUp?.Invoke(observation);
-                }
-                catch (Exception ex)
-                {
-                    Serilog.Log.Error(ex, "键盘钩子回调异常");
-                }
-            }
-            return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
-        }
-
-        private IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam)
-        {
-            if (nCode >= 0)
-            {
-                try
-                {
-                    int msg = (int)wParam;
-                    switch (msg)
+                    stop.ThrowIfCancellationRequested();
+                    _keyboardProc = KeyboardCallback;
+                    _mouseProc = MouseCallback;
+                    var module = GetModuleHandle(null);
+                    _keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardProc, module, 0);
+                    _mouseHook = SetWindowsHookEx(WH_MOUSE_LL, _mouseProc, module, 0);
+                    if (_keyboardHook == IntPtr.Zero || _mouseHook == IntPtr.Zero)
+                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                    while (!stop.IsCancellationRequested)
                     {
-                        case WM_LBUTTONDOWN:
-                            MouseButton?.Invoke(1);
-                            break;
-                        case WM_RBUTTONDOWN:
-                            MouseButton?.Invoke(2);
-                            break;
-                        case WM_MBUTTONDOWN:
-                            MouseButton?.Invoke(3);
-                            break;
-                        case WM_MOUSEWHEEL:
-                            var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
-                            // 高 16 位为有符号 delta
-                            short delta = (short)((data.mouseData >> 16) & 0xFFFF);
-                            Scroll?.Invoke(delta);
-                            break;
+                        var result = GetMessage(out var message, IntPtr.Zero, 0, 0);
+                        if (result == 0) break;
+                        if (result < 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                        TranslateMessage(ref message);
+                        DispatchMessage(ref message);
                     }
                 }
-                catch (Exception ex)
+                catch (Exception exception) when (exception is not OperationCanceledException)
                 {
-                    Serilog.Log.Error(ex, "鼠标钩子回调异常");
+                    Serilog.Log.Error(exception, "低级输入钩子线程异常");
+                    throw;
+                }
+                finally
+                {
+                    if (_keyboardHook != IntPtr.Zero) UnhookWindowsHookEx(_keyboardHook);
+                    if (_mouseHook != IntPtr.Zero) UnhookWindowsHookEx(_mouseHook);
+                    _keyboardHook = IntPtr.Zero;
+                    _mouseHook = IntPtr.Zero;
                 }
             }
-            return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+
+            private IntPtr KeyboardCallback(int nCode, IntPtr wParam, IntPtr lParam)
+            {
+                // 回调内吞异常：异常若穿过 P/Invoke 边界，行为未定义且可能导致系统摘钩。
+                // 无论如何都要走到 CallNextHookEx，不破坏钩子链。
+                if (nCode >= 0)
+                {
+                    try
+                    {
+                        int msg = (int)wParam;
+                        var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+                        var observation = new WindowsNativeKeyObservation(
+                            data.vkCode,
+                            data.scanCode,
+                            (data.flags & LLKHF_EXTENDED) != 0);
+
+                        if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+                            _owner.PublishKeyDown(this, observation);
+                        else if (msg == WM_KEYUP || msg == WM_SYSKEYUP)
+                            _owner.PublishKeyUp(this, observation);
+                    }
+                    catch (Exception ex)
+                    {
+                        Serilog.Log.Error(ex, "键盘钩子回调异常");
+                    }
+                }
+                return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+            }
+
+            private IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam)
+            {
+                if (nCode >= 0)
+                {
+                    try
+                    {
+                        int msg = (int)wParam;
+                        switch (msg)
+                        {
+                            case WM_LBUTTONDOWN:
+                                _owner.PublishMouse(this, 1);
+                                break;
+                            case WM_RBUTTONDOWN:
+                                _owner.PublishMouse(this, 2);
+                                break;
+                            case WM_MBUTTONDOWN:
+                                _owner.PublishMouse(this, 3);
+                                break;
+                            case WM_MOUSEWHEEL:
+                                var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                                // 高 16 位为有符号 delta
+                                short delta = (short)((data.mouseData >> 16) & 0xFFFF);
+                                _owner.PublishScroll(this, delta);
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Serilog.Log.Error(ex, "鼠标钩子回调异常");
+                    }
+                }
+                return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+            }
         }
     }
 }

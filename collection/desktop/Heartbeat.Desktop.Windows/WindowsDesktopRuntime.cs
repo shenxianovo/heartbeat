@@ -40,7 +40,8 @@ public sealed class WindowsDesktopRuntime : IWindowController, IDesktopApplicati
             host.Services.GetRequiredService<ICollectionStatus>(),
             host.Services.GetRequiredService<IAutoStartService>(),
             host.Services.GetRequiredService<IClientCompatibilityStatus>(),
-            host.Services.GetRequiredService<IUploadStatus>());
+            host.Services.GetRequiredService<IUploadStatus>(),
+            host.Services.GetRequiredService<InputObservationStatus>());
         CollectorMarketplace = new DesktopCollectorMarketplace(
             host.Services.GetRequiredService<ICollectorMarketplace>());
         var channel = RuntimeInformation.ProcessArchitecture == Architecture.Arm64

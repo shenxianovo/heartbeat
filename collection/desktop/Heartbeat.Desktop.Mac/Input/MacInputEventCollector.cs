@@ -1,4 +1,5 @@
 using Heartbeat.Collector.System.Input;
+using Heartbeat.Collector.System.Observations;
 using Heartbeat.Collection.Hub.Configuration;
 using Heartbeat.Desktop.Mac.Configuration;
 using Heartbeat.Desktop.Mac.Native;
@@ -11,7 +12,7 @@ public sealed class MacInputEventCollector :
     IHostedService,
     IMacInputMonitoringEvents,
     IInputEventRecordingPolicy,
-    IDisposable
+    IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan PermissionPollInterval = TimeSpan.FromSeconds(1);
     private const string InputMonitoringSettingsUrl =
@@ -26,6 +27,9 @@ public sealed class MacInputEventCollector :
     private MacInputMonitoringCapabilityState _capabilityState;
     private bool _started;
     private bool _hookRunning;
+    private bool _nativeFailed;
+    private readonly ObservationReconciler _transitions;
+    private Task? _stopTask;
     private bool _lastRecordingEnabled;
     private CancellationTokenSource? _pollCts;
     private Task? _pollTask;
@@ -38,6 +42,7 @@ public sealed class MacInputEventCollector :
         IInputActivitySignal inputActivity,
         InputEventBuffer buffer)
     {
+        _transitions = new ObservationReconciler(ReconcileHook);
         _config = config;
         _native = native;
         _commandRunner = commandRunner;
@@ -70,46 +75,56 @@ public sealed class MacInputEventCollector :
     {
         lock (_gate)
         {
+            if (_stopTask is not null) throw new InvalidOperationException("Input collection is stopping.");
             if (_started) return Task.CompletedTask;
             _started = true;
+            _config.ConfigChanged += OnConfigChanged;
+            _native.Observation += OnNativeObservation;
+            _native.Failed += OnNativeFailure;
+            var polling = new CancellationTokenSource();
+            _pollCts = polling;
+            _pollTask = Task.Run(() => PollPermissionAsync(polling.Token), CancellationToken.None);
         }
-
-        _config.ConfigChanged += OnConfigChanged;
-        _native.Observation += OnNativeObservation;
         RefreshCapability();
-        _pollCts = new CancellationTokenSource();
-        _pollTask = Task.Run(() => PollPermissionAsync(_pollCts.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        TaskCompletionSource completion;
         lock (_gate)
-            _started = false;
-        _pollCts?.Cancel();
-        if (_pollTask != null && _pollTask.Id != Task.CurrentId)
         {
-            try
-            {
-                _pollTask.Wait(TimeSpan.FromSeconds(2));
-            }
-            catch (AggregateException exception) when (
-                exception.InnerExceptions.All(inner => inner is OperationCanceledException))
-            {
-                // normal shutdown
-            }
+            if (_stopTask is not null) return _stopTask.WaitAsync(cancellationToken);
+            _started = false;
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _stopTask = completion.Task;
+            _config.ConfigChanged -= OnConfigChanged;
+            _native.Observation -= OnNativeObservation;
+            _native.Failed -= OnNativeFailure;
         }
-        _pollTask = null;
-        _pollCts?.Dispose();
-        _pollCts = null;
-        _config.ConfigChanged -= OnConfigChanged;
-        _native.Observation -= OnNativeObservation;
-        StopHook();
-        return Task.CompletedTask;
+        _ = CompleteStopAsync(completion);
+        return completion.Task.WaitAsync(cancellationToken);
+    }
+
+    private async Task CompleteStopAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            _pollCts?.Cancel();
+            try { await _transitions.Reconcile().ConfigureAwait(false); }
+            finally
+            {
+                try { if (_pollTask is not null) await _pollTask.ConfigureAwait(false); }
+                finally { _pollCts?.Dispose(); }
+            }
+            completion.SetResult();
+        }
+        catch (Exception exception) { completion.SetException(exception); }
     }
 
     public void SetInteractionSignalEnabledFromUser(bool enabled)
     {
+        lock (_gate) _nativeFailed = false;
         _config.Update(value => value.InteractionSignalEnabled = enabled);
         if (enabled && !_native.IsAuthorized)
             _native.RequestAuthorization();
@@ -118,6 +133,7 @@ public sealed class MacInputEventCollector :
 
     public void SetInputEventRecordingEnabledFromUser(bool enabled)
     {
+        lock (_gate) _nativeFailed = false;
         _config.Update(value => value.InputEventRecordingEnabled = enabled);
         if (enabled && !_native.IsAuthorized)
             _native.RequestAuthorization();
@@ -170,7 +186,9 @@ public sealed class MacInputEventCollector :
             _capabilityState = current;
         }
 
-        ReconcileHook(current);
+        _ = ObserveTransitionAsync(_transitions.Reconcile());
+        // A synchronous transition may have reported a native failure. Publish its resulting state.
+        current = CapabilityState;
         if (previous != current)
             CapabilityChanged?.Invoke(current);
     }
@@ -180,56 +198,73 @@ public sealed class MacInputEventCollector :
         var config = _config.Current;
         if (!config.InteractionSignalEnabled && !config.InputEventRecordingEnabled)
             return MacInputMonitoringCapabilityState.Disabled;
-        if (!_native.IsAvailable)
+        if (_nativeFailed || !_native.IsAvailable)
             return MacInputMonitoringCapabilityState.Unavailable;
         return _native.IsAuthorized
             ? MacInputMonitoringCapabilityState.Available
             : MacInputMonitoringCapabilityState.PermissionRequired;
     }
 
-    private void ReconcileHook(MacInputMonitoringCapabilityState state)
+    private void ReconcileHook()
+    {
+        try { ApplyHookState(); }
+        catch
+        {
+            lock (_gate)
+            {
+                _nativeFailed = true;
+                _capabilityState = MacInputMonitoringCapabilityState.Unavailable;
+            }
+            CapabilityChanged?.Invoke(MacInputMonitoringCapabilityState.Unavailable);
+            throw;
+        }
+    }
+
+    private void ApplyHookState()
     {
         var config = _config.Current;
         bool started;
-        lock (_gate)
-            started = _started;
-        var shouldRun = started
-            && state == MacInputMonitoringCapabilityState.Available
+        lock (_gate) started = _started;
+        var shouldRun = started && ComputeState() == MacInputMonitoringCapabilityState.Available
             && (config.InputEventRecordingEnabled
                 || (config.InteractionSignalEnabled && config.WindowTitleObservationEnabled));
-
-        bool startHook = false;
-        bool stopHook = false;
-        lock (_gate)
+        if (shouldRun && !_hookRunning)
         {
-            if (shouldRun && !_hookRunning)
-            {
-                _hookRunning = true;
-                startHook = true;
-            }
-            else if (!shouldRun && _hookRunning)
-            {
-                _hookRunning = false;
-                stopHook = true;
-            }
+            _native.StartListening();
+            _hookRunning = true;
         }
-
-        if (startHook) _native.StartListening();
-        if (stopHook) _native.StopListening();
+        else if (!shouldRun && _hookRunning)
+        {
+            _native.StopListening();
+            _hookRunning = false;
+        }
     }
 
-    private void StopHook()
+    private async Task ObserveTransitionAsync(Task transition)
+    {
+        try { await transition; }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "macOS input capability transition failed");
+        }
+    }
+
+    private void OnNativeFailure(Exception exception)
     {
         lock (_gate)
         {
-            if (!_hookRunning) return;
-            _hookRunning = false;
+            if (!_started) return;
+            _nativeFailed = true;
+            _capabilityState = MacInputMonitoringCapabilityState.Unavailable;
         }
-        _native.StopListening();
+        Log.Warning(exception, "macOS input observation failed");
+        _ = ObserveTransitionAsync(_transitions.Reconcile());
+        CapabilityChanged?.Invoke(MacInputMonitoringCapabilityState.Unavailable);
     }
 
     private void OnNativeObservation(MacInputObservation observation)
     {
+        lock (_gate) { if (!_started || _capabilityState != MacInputMonitoringCapabilityState.Available) return; }
         var config = _config.Current;
         switch (observation.Kind)
         {
@@ -253,9 +288,11 @@ public sealed class MacInputEventCollector :
         }
     }
 
+    public ValueTask DisposeAsync() => new(StopAsync(CancellationToken.None));
+
     public void Dispose()
     {
-        _ = StopAsync(CancellationToken.None);
+        StopAsync(CancellationToken.None).GetAwaiter().GetResult();
         GC.SuppressFinalize(this);
     }
 }

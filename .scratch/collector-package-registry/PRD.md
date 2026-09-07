@@ -15,12 +15,12 @@ Instance，Runtime 成为动态 Instance 唯一权威。Headless 独立 deploy�
 安装/授权/恢复/卸载 smoke 均已完成。通用 ExternalHost 接入已按
 [ADR-051](../../docs/adr/051-generic-external-host-identity-and-browser-delivery.md) 实现（issue 06）：一条
 `/v1/collector-protocol/external-host` route 承载全部自己出现的 External Host，所有权按 External Host Identity
-而非整个 Instance 隔离。Desktop Marketplace 已实现并与 Headless 共用完整生命周期 Runtime；当前主缺口是
-Browser 独立 Release 与真实 Desktop Browser 纵切，Desktop 最终包的新启动 smoke 仍待 CI/human gate。
+而非整个 Instance 隔离。Desktop Marketplace 已实现并与 Headless 共用完整生命周期 Runtime；独立发布和
+Windows x64/macOS ARM64 最终包的 CI 启动检查已完成，当前主缺口是原生 UI 与真实浏览器采集验收。
 
 Browser 已实现通用协议适配、精确 Package 身份、Marketplace manifest 与四 target 独立 release workflow，
-并由 Collector-owned 真实 TypeScript → .NET handler 测试验证互通。首个公开 tag、最终 Desktop 发布与
-Windows/macOS Chrome/Edge 实机验收仍待完成（issue 07 ready-for-human）。宿主无需恢复任何具名分支。
+并由 Collector-owned 真实 TypeScript → .NET handler 测试验证互通。Browser 0.1.0 和 Desktop v4.2.0 已公开发布；
+Windows/macOS Chrome/Edge 实机采集验收仍待完成（issue 07 ready-for-human）。宿主无需恢复任何具名分支。
 
 2026-09-01 以前的 Registry/Approve/Switch 实现已撤回。issues 01/02 已按 ADR-048/050 完成；issues 06/07
 已按 [ADR-051](../../docs/adr/051-generic-external-host-identity-and-browser-delivery.md) 重写，issue 10 承接
@@ -85,22 +85,22 @@ Browser 独立发布与真实 smoke。
 | 04 exact package approval | wontfix | ADR-048 明确不做 approval/offer |
 | 05 VRChat ready switch | wontfix | ADR-048 明确不做 candidate/LKG switch |
 | 06 generic ExternalHost | ready-for-human | 通用 route、身份级 Activation/Stream ownership 与卸载已实现 |
-| 07 Browser release and smoke | ready-for-human | 代码与自动验证完成；首个 tag、最终 Desktop 下载版与实机 smoke 待验收 |
-| 10 Desktop Marketplace | ready-for-human | 实现与自动测试完成；最终 Windows/macOS 包启动 smoke 待 CI |
+| 07 Browser release and smoke | ready-for-human | Browser 0.1.0、Desktop v4.2.0 已发布；浏览器实机采集 smoke 待验收 |
+| 10 Desktop Marketplace | ready-for-human | v4.2.0 Windows x64/macOS ARM64 实包启动检查通过；UI/离线 Catalog 实机验收待完成 |
 
 ## Exit conditions
 
 - [x] Headless 与 Desktop 使用同一个 Package Installation module，并共用 Marketplace lifecycle Runtime。
 - [x] VRChat Package 可独立于 Headless image 构建和替换。
 - [x] Backend 与 Headless deployment 分离（`deploy-hub.yml` 只部署 Headless Hub）。
-- [ ] VRChat 与 Browser 各自通过显式 tag 发布 Web Package。
+- [x] VRChat 与 Browser 各自通过显式 tag 发布 Web Package。
 - [x] System 仍只随 Desktop Release（publish target + Desktop Release 产物断言，issue 08）。
 - [x] 宿主启动不依赖可选 Collector：Desktop 构建与产物不含 Browser，Headless 可零 Instance 启动且单
       Instance 失败被隔离（issue 08）。
 - [x] 宿主不认识具名可选 Collector：Desktop 与通用 Hub Runtime 只组合通用 seam + System BuiltIn，
       Browser 专属 runtime / protocol handler / 安装目录 / UI 条目全部删除（issue 09）。
 - [ ] 通用 ExternalHost 安装/连接能力存在，Browser 由此重新获得宿主接入路径：宿主通用接入与 Desktop
-      Marketplace 已完成（issues 06/10），Browser Package 发布与真实接入待 issue 07。
+      Marketplace 与 Browser Package 发布已完成（issues 06/10/07），实际浏览器采集接入仍待实机验收。
 - [x] `facts.segment/v1` 由 Package `FactKind` 与 schema 驱动通用 ActivitySegment 投影，宿主不再硬编码
       具名 schema id 列表（issue 09）。
 - [x] 三类 Driver 继续通过统一 Protocol conformance。

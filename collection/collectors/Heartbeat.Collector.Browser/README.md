@@ -41,9 +41,11 @@ Stream。未 ACK 的 Facts/Stream Gaps 留在本地 durable outbox。
 完整卸载撤销全部 lease；仍加载的扩展重连得到 `package_not_installed`，不会重建已删除的 Instance。
 本阶段没有 Store 分发、自动扩展 reload 或 Package 更新；新版本需先卸载再安装。
 
-**当前是代码和自动验证完成，尚未真实发布。** 第一个 tag、公网四 target 回读与最终 Windows/macOS
-Desktop + Chrome/Edge smoke 见 [issue 07](../../../.scratch/collector-package-registry/issues/07-deploy-and-vrchat-smoke.md)。
-现有 Desktop v4.1.0 不含新的通用接入/Marketplace，需要后续 Desktop 发布才能形成用户下载闭环。
+**Browser 0.1.0 与 Desktop v4.2.0 已于 2026-09-07 独立发布。** Browser 四 target 的公网 metadata、
+artifact 长度/SHA-256 与精确 Package 引用已回读验证，Catalog 保留了既有 VRChat 条目。
+Desktop 安装包和 Portable 见 [v4.2.0 Release](https://github.com/shenxianovo/Heartbeat/releases/tag/v4.2.0)。
+Windows x64/macOS ARM64 packaged-host 启动检查已在发布 CI 通过；实际 Chrome/Edge 加载、采集、Backend
+到达与完整卸载仍待实机验收，见 [issue 07](../../../.scratch/collector-package-registry/issues/07-deploy-and-vrchat-smoke.md)。
 
 术语见 [Collection Context](../../CONTEXT.md)，行为契约见
 [Conformance Suite](../../protocol/conformance/README.md)，Fact payload 见 [Contracts](../../contracts/README.md)。

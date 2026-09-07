@@ -92,3 +92,14 @@ ManagedProcess 取消等待早于其底层启动清理完成的问题；现已�
 最终定向验证：Hub Marketplace/Installation/ExternalHost/ManagedProcess transcript 69 passed，Headless 5 passed，
 Desktop UI 42 passed，共 116 passed / 0 failed；Collector contracts 与 `git diff --check` 通过。此前 1084 条
 全量结果只属于当时版本，最后修复后执行的是这里列出的定向回归。当前未提交、未 push、未发布。
+
+### 2026-09-07 — Final Desktop package published
+
+包含最终修复的 `6a0a4b08f51f22dfef9865c073ad24bceb570078` 已通过 `v4.2.0` 发布：
+[Release](https://github.com/shenxianovo/Heartbeat/releases/tag/v4.2.0)、
+[workflow](https://github.com/shenxianovo/Heartbeat/actions/runs/34083843184)。
+Windows x64/macOS ARM64 的最终 packaged-host 启动检查在 CI 通过；Windows ARM64 只验证产物，未原生运行。
+三种 Portable 均从公开 Release 下载并验证长度、SHA-256、zip CRC 与 System-only Package 内容。
+
+最终包构建与自动启动验证已完成；owner 仍需验收原生采集器页、System 正常工作与 Catalog 离线隔离。
+此记录不代替 UI 实机验收，issue 保持 `ready-for-human`，不重复创建后续 issue。

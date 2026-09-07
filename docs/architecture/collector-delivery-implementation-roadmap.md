@@ -100,7 +100,7 @@ flowchart TB
 Browser runtime、专属 protocol handler、安装目录或 UI 条目，而通用 ExternalHost 接入能力已按 ADR-051 实现
 （issue 06），Desktop 两个 head 都注册了通用 binding，通用 Marketplace 安装入口也已完成（issue 10）。
 Browser 自身的通用协议、Marketplace manifest 与四 target 独立发布链路已实现（issue 07）；真实
-TypeScript → .NET handler 测试已覆盖互通。首个公开 Release 与最终 Windows/macOS Desktop smoke 尚待完成。
+TypeScript → .NET handler 测试已覆盖互通。Browser 0.1.0 和 Desktop v4.2.0 已公开发布并通过产物验证；实际浏览器采集 smoke 尚待完成。
 
 ## 第一条小功能：外置本地 VRChat Package
 
@@ -160,8 +160,8 @@ flowchart LR
 - G 已完成宿主侧的全部：Desktop 构建与产物不含 Browser，宿主也不再认识 Browser——Hub 与两个平台 head
   没有它的 runtime、专属 protocol handler、安装目录、平台知识或 UI 条目（ADR-049）。通用 ExternalHost 的连接
   能力也已实现（issue 06：一条 `/v1/collector-protocol/external-host` route，身份级所有权）。Desktop 安装入口
-  已实现（issue 10），最终包的启动验收仍待完成。Browser 自身的通用协议适配、Marketplace manifest 与独立 tag
-  workflow 已完成（issue 07）；首个公开 Package 和最终实机验证尚待完成。
+  已实现（issue 10），v4.2.0 的 Windows x64/macOS ARM64 packaged-host 启动检查已通过。Browser 通用协议、
+  Marketplace manifest 与独立 tag workflow 已完成并发布 0.1.0（issue 07）；最终浏览器实机验证尚待完成。
 - G 的剩余部分复用已经证明的 Installation/Web seam，不恢复 Browser 专属 binding。
 
 ## 下一阶段实现顺序
@@ -215,10 +215,11 @@ System 不进入 Marketplace，Package 不提供人工加载说明，主 UI 不�
 
 2026-09-04 已完成宿主侧实现：`CollectorMarketplaceRuntime` 是 Desktop 与 Headless 共用的深模块，统一拥有
 Installation、默认 Instance、Driver、Activation、恢复、状态、重试与卸载；两个宿主不再各自编排这些阶段。
-此前 macOS publish/Portable 实包已验证只含 System，但该包早于最后修复；owner 仍需用最终源码构建的
-macOS/Windows Portable 验证启动、System、采集器页与 Catalog 离线隔离（issue 10 `ready-for-human`）。
+2026-09-07 发布的 Desktop v4.2.0 已包含最终修复，三平台 Portable 的公网下载与 System-only 内容验证通过，
+Windows x64/macOS ARM64 的 CI 实包启动检查通过；Windows ARM64 未执行原生启动。owner 仍需用最终包
+验收 System、采集器页与 Catalog 离线隔离（issue 10 `ready-for-human`）。
 
-### Feature 07：Browser 独立 Package 与真实纵切（代码完成，待公开发布与实机验收）
+### Feature 07：Browser 独立 Package 与真实纵切（已发布，待浏览器实机验收）
 
 ```mermaid
 flowchart LR
@@ -244,8 +245,8 @@ flowchart LR
 - Browser 已使用通用 `/v1/collector-protocol/external-host`、精确 Package/Artifact 身份与
   `appIdentityKey + externalHostIdentity`。manifest 声明 Machine-scoped 默认 Instance，Browser release workflow
   生成一个确定性 zip 并登记四 target。Collector 自己拥有真实 TypeScript → .NET handler 测试，不恢复宿主具名
-  binding。代码和自动验证已经完成，但首个 tag、公网回读和最终实机 smoke 尚待完成（issue 07）。
-  GitHub Desktop 最新 v4.1.0 早于通用 binding/Marketplace 实现，需要再发布 Desktop 才能让下载用户安装接入。
+  binding。Browser 0.1.0 的四 target 公开 Release/Catalog 已验证，Desktop v4.2.0 下载版已包含通用
+  binding/Marketplace；最终 Chrome/Edge 实机采集 smoke 尚待完成（issue 07）。
 - `facts.segment/v1` 已统一走 ActivitySegment 投影：Package 自有 JSON Schema 先验证 payload，通用 projector
   再要求共同 `identityKey`，Hub 不再按 schema id / major 列出 Browser、VRChat 或测试 Collector。Hub.Tests
   也不再构建 Browser 或引用 VRChat 产品；VRChat ManagedProcess E2E 由 Collector 自身测试拥有。
@@ -263,7 +264,7 @@ flowchart LR
   不含任何具名 Collector，可由未来 Desktop 直接复用。
 - 静态 Registry 的精确 Version、按 Host target 独立的 Catalog Latest 与 Collector tag 更新链已落地；Latest
   只用于首次发现，Runtime 保存的精确 Package identity 才是重启权威。VRChat 0.2.1 Catalog 与生产端到端
-  smoke 已完成，下一条真实发布纵切是 Browser。
+  smoke 已完成；Browser 0.1.0 也已独立发布并完成四 target 公网回读，其实际浏览器采集验收仍待完成。
 
 ## 验收边界
 

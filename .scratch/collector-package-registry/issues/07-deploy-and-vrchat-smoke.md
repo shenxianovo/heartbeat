@@ -62,9 +62,9 @@ Priority: P1 — 用 Browser 证明 ExternalHost Collector 可以独立于 Deskt
 
 代码与自动验证完成后保持 `ready-for-human`，直到：
 
-- 推送一个真实 `collector-browser/vX.Y.Z` tag，四个公网 target 的 metadata 与 artifact 可回读；
-- 在真实 Windows/macOS Desktop 上至少各完成 Chrome 或 Edge 的 Load unpacked 与连接；
-- 至少一台机器完成 Chrome + Edge 或两个 Profile 并行、重连、事实到达 Backend 与卸载后拒绝重连 smoke。
+- [x] 推送一个真实 `collector-browser/vX.Y.Z` tag，四个公网 target 的 metadata 与 artifact 可回读；
+- [ ] 在真实 Windows/macOS Desktop 上至少各完成 Chrome 或 Edge 的 Load unpacked 与连接；
+- [ ] 至少一台机器完成 Chrome + Edge 或两个 Profile 并行、重连、事实到达 Backend 与卸载后拒绝重连 smoke。
 
 ## Comments
 
@@ -116,3 +116,24 @@ Profile 的实机采集、Backend 到达与完整卸载。Desktop v4.1.0 尚不�
 Lifecycle/friction closeout：已同步 Browser README、目标路线图和 PRD；不新增重复 issue，不重写已接受
 ADR。代码与自动验证完成，真实 tag、公开 Release 与最终 Desktop/Chrome/Edge 实机验收仍未完成，状态
 保持 ready-for-human。Desktop v4.1.0 的下载版仍不具备新通用能力，需另行发布最终 Desktop。
+
+### 2026-09-07 — Independent releases published
+
+Owner 授权发布后，`collector-browser/v0.1.0` 与 `v4.2.0` 两个 annotated tag 均指向
+`6a0a4b08f51f22dfef9865c073ad24bceb570078`，已推送并分别完成独立 workflow：
+
+- [Browser release run](https://github.com/shenxianovo/Heartbeat/actions/runs/34083843618) build/publish 成功。
+- [Desktop release run](https://github.com/shenxianovo/Heartbeat/actions/runs/34083843184) 三平台构建与发布成功；
+  [v4.2.0](https://github.com/shenxianovo/Heartbeat/releases/tag/v4.2.0) 已成为公开 Latest Release。
+- [公网 Catalog](https://heartbeat.shenxianovo.com/collector-registry/v1/catalog.json) 已登记 Browser 0.1.0，
+  保留 VRChat；Windows/macOS 各 x64/arm64 的 release metadata 与 zip 均完成独立公网回读。
+  四 target 均为 53261 bytes，SHA-256
+  `ed7a9799fa2243fc5feffe1358b7cbca919b54cc7e05b61dc89e26c19ac3c774`；zip CRC、manifest 与 bootstrap
+  精确引用一致，默认 Machine Instance 与身份 dimensions 正确。
+- Desktop 三个公开 Portable 下载完成，长度与 SHA-256 匹配 GitHub asset metadata，zip CRC 正常，
+  每个包都只含 System Collector。Windows x64/macOS ARM64 在 CI 执行 packaged-host 启动检查并通过；
+  Windows ARM64 完成产物验证，CI 明确跳过原生执行，不能视为 ARM64 实机启动验收。
+
+本机验证报告位于 `.local/release-verification-2026-09-07/browser-report.json` 与 `desktop-report.json`。
+发布 gate 已完成；真实 Chrome/Edge Load unpacked、跨 Profile/浏览器采集、Backend 到达和卸载仍由 owner
+承接，issue 保持 `ready-for-human`。README、路线图与 PRD 已同步公开发布状态。

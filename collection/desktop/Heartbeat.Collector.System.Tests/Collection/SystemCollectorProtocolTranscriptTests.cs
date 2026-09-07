@@ -209,7 +209,7 @@ public sealed class SystemCollectorProtocolTranscriptTests : IDisposable
         Assert.True(inputBuffer.OnKeyDown(InputKeyPosition.KeyA));
         await WaitUntilAsync(() => inputBuffer.Count == 1);
 
-        var projected = Assert.Single(inputBuffer.DrainAll());
+        var projected = Assert.Single(inputBuffer.ReadAll());
         Assert.Equal(7, int.Parse(projected.Id.ToString("D")[14].ToString()));
         Assert.Equal(InputEventType.KeyDown, projected.EventType);
         Assert.Equal(InputCodeSets.HeartbeatKeyPositionV1, projected.CodeSet);
@@ -373,14 +373,14 @@ public sealed class SystemCollectorProtocolTranscriptTests : IDisposable
 
         Assert.Equal(FactDeliveryStatus.Committed, Assert.Single(first.Results).Status);
         Assert.Equal(FactDeliveryStatus.Retry, Assert.Single(second.Results).Status);
-        var drained = ((IUploadSource<InputEventItem>)inputSink).Drain();
+        var drained = ((IUploadSource<InputEventItem>)inputSink).ReadBatch();
         Assert.Single(drained);
-        ((IDurableUploadSource<InputEventItem>)inputSink).CompleteDrain(drained, []);
+        ((IUploadSource<InputEventItem>)inputSink).Confirm(drained);
 
         var retried = await stream.PublishAsync(Guid.CreateVersion7(), [secondFact]);
 
         Assert.Equal(FactDeliveryStatus.Committed, Assert.Single(retried.Results).Status);
-        Assert.Equal(secondFact.FactId, Assert.Single(inputSink.DrainAll()).Id);
+        Assert.Equal(secondFact.FactId, Assert.Single(inputSink.ReadAll()).Id);
     }
 
     [Fact]
@@ -1053,9 +1053,10 @@ public sealed class SystemCollectorProtocolTranscriptTests : IDisposable
         List<Heartbeat.Core.DTOs.Segments.ActivitySegmentItem> segments = [];
         await WaitUntilAsync(() =>
         {
-            segments = sink.GetAndClearSegments();
+            segments = sink.ReadBatch();
             return segments.Count != 0;
         });
+        sink.Confirm(segments);
         return segments;
     }
 

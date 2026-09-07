@@ -126,7 +126,7 @@ public sealed class MacInputEventCollectorTests : IDisposable
 
         Assert.Equal(1, native.StartCount);
         Assert.Equal(1, signal.Clicks);
-        Assert.Empty(buffer.DrainAll());
+        Assert.Empty(buffer.ReadAll());
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public sealed class MacInputEventCollectorTests : IDisposable
         native.Raise(new MacInputObservation(MacInputObservationKind.MouseButton, 2));
         native.Raise(new MacInputObservation(MacInputObservationKind.Scroll, 240));
 
-        var events = buffer.DrainAll();
+        var events = buffer.ReadAll();
         Assert.Equal(5, events.Count);
         Assert.Equal(2, events.Count(item =>
             item.EventType == InputEventType.KeyDown &&
@@ -266,7 +266,7 @@ public sealed class MacInputEventCollectorTests : IDisposable
         try
         {
             native.Raise(new MacInputObservation(MacInputObservationKind.KeyDown, 0x00));
-            Assert.Empty(buffer.DrainAll());
+            Assert.Empty(buffer.ReadAll());
         }
         finally { release.Set(); await refreshing; }
     }

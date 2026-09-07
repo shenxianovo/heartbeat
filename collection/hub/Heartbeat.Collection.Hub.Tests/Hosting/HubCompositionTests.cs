@@ -33,8 +33,8 @@ public class HubCompositionTests
 
     private sealed class EmptySource<T> : IUploadSource<T>
     {
-        public List<T> Drain() => [];
-        public void Reinject(List<T> items) { }
+        public List<T> ReadBatch() => [];
+        public void Confirm(IReadOnlyList<T> items) { }
     }
 
     private sealed class MemoryCache<T> : ICache<T>
@@ -60,14 +60,12 @@ public class HubCompositionTests
         services.AddSingleton<ICache<InputEventItem>, MemoryCache<InputEventItem>>();
         services.AddSingleton(sp => new UploadStream<ActivitySegmentItem>(
             "segments",
-            sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>(),
-            (_, _) => Task.FromResult(ApiResult.Ok),
-            sp.GetRequiredService<ICache<ActivitySegmentItem>>()));
+            [sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>()],
+            (_, _) => Task.FromResult(ApiResult.Ok)));
         services.AddSingleton(sp => new UploadStream<InputEventItem>(
             "input events",
-            sp.GetRequiredService<IUploadSource<InputEventItem>>(),
-            (_, _) => Task.FromResult(ApiResult.Ok),
-            sp.GetRequiredService<ICache<InputEventItem>>()));
+            [sp.GetRequiredService<IUploadSource<InputEventItem>>()],
+            (_, _) => Task.FromResult(ApiResult.Ok)));
 
         using var provider = services.BuildServiceProvider();
         Assert.Same(

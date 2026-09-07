@@ -1,65 +1,41 @@
 using Heartbeat.Collection.Hub.Http;
-using Heartbeat.Collection.Hub.Storage;
 using Serilog;
 
 namespace Heartbeat.Collection.Hub.Upload;
 
-/// <summary>
-/// Durable Upload Stream. Retryable failures stay queued; 400/422 are bisected until bad records
-/// can be dead-lettered; 413 is bisected until the transport accepts each sub-batch; 426 pauses
-/// the stream. At every return point each drained item has either been delivered, durably
-/// cached/dead-lettered, or reinjected into its source.
-/// </summary>
+/// <summary>Transports retained snapshots and confirms delivered or quarantined records to their owner.</summary>
 public sealed class UploadStream<T>
 {
     private readonly string _label;
-    private readonly IUploadSource<T> _source;
+    private readonly IReadOnlyList<IUploadSource<T>> _sources;
     private readonly Func<List<T>, CancellationToken, Task<ApiResult>> _send;
-    private readonly ICache<T> _cache;
-    private readonly Func<List<T>, List<T>>? _compactCached;
     private readonly IDeadLetterStore<T>? _deadLetterStore;
     private readonly UploadStatusRegistry? _statusRegistry;
     private readonly ClientCompatibilityStatus? _compatibilityStatus;
 
     public UploadStream(
         string label,
-        IUploadSource<T> source,
+        IReadOnlyList<IUploadSource<T>> sources,
         Func<List<T>, CancellationToken, Task<ApiResult>> send,
-        ICache<T> cache,
-        Func<List<T>, List<T>>? compactCached = null,
         IDeadLetterStore<T>? deadLetterStore = null,
         UploadStatusRegistry? statusRegistry = null,
         ClientCompatibilityStatus? compatibilityStatus = null)
     {
         _label = label;
-        _source = source;
+        _sources = sources;
         _send = send;
-        _cache = cache;
-        _compactCached = compactCached;
         _deadLetterStore = deadLetterStore;
         _statusRegistry = statusRegistry;
         _compatibilityStatus = compatibilityStatus;
 
-        Status = cache.Status.State == CacheFileState.MigrationFailed
-            ? new UploadStreamStatus(
-                UploadStreamState.CacheMigrationFailed,
-                cache.Status.Message,
-                cache.Status.Action,
-                deadLetterStore?.Count ?? 0,
-                cache.Status.BackupPath,
-                deadLetterStore?.Location)
-            : UploadStreamStatus.Ready with
-            {
-                DeadLetterCount = deadLetterStore?.Count ?? 0,
-                DeadLetterPath = deadLetterStore?.Location
-            };
+        Status = sources.Select(source => source.StorageStatus)
+            .FirstOrDefault(status => status.State == UploadStreamState.CacheMigrationFailed) ?? ReadyStatus();
         _statusRegistry?.Update(_label, Status);
     }
 
     public UploadStreamStatus Status { get; private set; }
     public event Action<UploadStreamStatus>? StatusChanged;
     public UploadDrainResult<T>? LastDrain { get; private set; }
-    private int? _unconfirmed = 0;
 
     /// <summary>
     /// Clears this stream's in-process 426 pause for diagnostics. It intentionally does not clear
@@ -78,133 +54,56 @@ public sealed class UploadStream<T>
         List<T> items = [];
         var delivered = 0;
         Exception? error = null;
-        try
+        UploadStreamStatus? storageFailure = null;
+        var hasRetry = false;
+        foreach (var source in _sources)
         {
-            var paused = Status.State is UploadStreamState.UpdateRequired or UploadStreamState.CacheMigrationFailed;
-            if (!paused)
+            try
             {
-                var cached = await UploadCachedAsync(cancellationToken);
-                delivered += cached.DeliveredCount;
-                paused = cached.Paused;
-            }
-
-            if (Status.State != UploadStreamState.CacheMigrationFailed)
-            {
-                items = _source.Drain();
-                var result = paused ? BatchResult<T>.Pause(items) : await ProcessBatchAsync(items, cancellationToken);
+                // Reading also gives the owner a chance to persist fresh data while transport is paused.
+                var batch = source.ReadBatch();
+                items.AddRange(batch);
+                var paused = Status.State is UploadStreamState.UpdateRequired or UploadStreamState.CacheMigrationFailed;
+                var result = paused ? BatchResult<T>.Pause(batch) : await ProcessBatchAsync(batch, cancellationToken);
                 delivered += result.DeliveredCount;
-                if (items.Count > 0)
+                var retry = result.RetryItems.ToHashSet();
+                var confirmed = batch.Where(item => !retry.Contains(item)).ToList();
+                if (confirmed.Count > 0) source.Confirm(confirmed);
+                hasRetry |= result.RetryItems.Count > 0;
+                if (source.StorageStatus.State != UploadStreamState.Ready)
+                    storageFailure = source.StorageStatus;
+
+            }
+            catch (Exception exception)
+            {
+                error = exception;
+                Log.Warning(exception, "{Label}源仍保管未确认记录", _label);
+                storageFailure = source.StorageStatus.State == UploadStreamState.CacheMigrationFailed
+                    ? source.StorageStatus
+                    : new UploadStreamStatus(UploadStreamState.CacheWriteFailed, exception.Message,
+                        "Repair the source storage and retry.");
+            }
+        }
+        if (Status.State != UploadStreamState.UpdateRequired)
+        {
+            if (storageFailure is not null)
+                SetStatus(storageFailure with
                 {
-                    if (_source is IDurableUploadSource<T> durableSource)
-                        CompleteDurableSourceDrain(durableSource, items, result);
-                    else if (result.RetryItems.Count > 0)
-                        PreserveFreshRetryItems(result.RetryItems);
-                    else
-                        RecoverTransientStatus(UploadStreamState.CacheWriteFailed, UploadStreamState.DeadLetterWriteFailed);
-                }
-            }
-        }
-        catch (Exception exception)
-        {
-            error = exception;
-            // A source/retention failure has no receipt. Keep that uncertainty across later drains.
-            _unconfirmed = null;
-            Log.Warning(exception, "{Label}交付责任未确认", _label);
-        }
-        var remainder = ReadRemainder(() => _source.Remainder) +
-            ReadRemainder(() => new DeliveryRemainder(_cache.Load().Count + (_deadLetterStore?.Count ?? 0), 0)) +
-            new DeliveryRemainder(0, _unconfirmed);
-        return LastDrain = new(items, delivered, remainder, error);
-    }
-
-    private static DeliveryRemainder ReadRemainder(Func<DeliveryRemainder> read)
-    {
-        try { return read(); }
-        catch { return DeliveryRemainder.Unknown; }
-    }
-
-    private void CompleteDurableSourceDrain(
-        IDurableUploadSource<T> source,
-        IReadOnlyList<T> drained,
-        BatchResult<T> result)
-    {
-        try
-        {
-            source.CompleteDrain(drained, result.RetryItems);
-            if (!result.Paused)
-            {
-                RecoverTransientStatus(
-                    UploadStreamState.CacheWriteFailed,
-                    UploadStreamState.DeadLetterWriteFailed);
-            }
-        }
-        catch (Exception exception)
-        {
-            Log.Warning(exception, "提交{Label}持久源 drain 结果失败；原记录仍保留", _label);
-            if (Status.State != UploadStreamState.UpdateRequired)
-            {
-                SetStatus(new UploadStreamStatus(
-                    UploadStreamState.CacheWriteFailed,
-                    exception.Message,
-                    "Free disk space or repair the durable source path, then retry.",
-                    _deadLetterStore?.Count ?? 0,
-                    DeadLetterPath: _deadLetterStore?.Location));
-            }
-        }
-    }
-
-    private async Task<BatchResult<T>> UploadCachedAsync(CancellationToken cancellationToken)
-    {
-        List<T> cached;
-        try
-        {
-            cached = _cache.Load();
-        }
-        catch (CacheUnavailableException ex)
-        {
-            SetStatus(new UploadStreamStatus(
-                UploadStreamState.CacheMigrationFailed,
-                ex.Message,
-                _cache.Status.Action,
-                _deadLetterStore?.Count ?? 0,
-                _cache.Status.BackupPath,
-                _deadLetterStore?.Location));
-            return BatchResult<T>.Pause([]);
-        }
-
-        if (cached.Count == 0) return BatchResult<T>.Complete;
-        var toSend = _compactCached?.Invoke(cached) ?? cached;
-        Log.Information("发现 {Count} 条缓存{Label}，尝试上传...", toSend.Count, _label);
-
-        var result = await ProcessBatchAsync(toSend, cancellationToken);
-        try
-        {
-            _cache.Replace(result.RetryItems);
-            if (result.RetryItems.Count == 0 && !result.Paused)
-            {
-                RecoverTransientStatus(
-                    UploadStreamState.CacheWriteFailed,
-                    UploadStreamState.DeadLetterWriteFailed);
-            }
+                    DeadLetterCount = _deadLetterStore?.Count ?? 0,
+                    DeadLetterPath = _deadLetterStore?.Location
+                });
+            else if (!hasRetry)
+                RecoverTransientStatus(UploadStreamState.CacheWriteFailed, UploadStreamState.DeadLetterWriteFailed);
             else
-            {
                 RecoverTransientStatus(UploadStreamState.CacheWriteFailed);
-            }
         }
-        catch (Exception ex)
+        var remainder = new DeliveryRemainder(_deadLetterStore?.Count ?? 0, 0);
+        foreach (var source in _sources)
         {
-            Log.Warning(ex, "提交{Label}缓存重传结果失败；原缓存仍保留", _label);
-            if (Status.State != UploadStreamState.UpdateRequired)
-            {
-                SetStatus(new UploadStreamStatus(
-                    UploadStreamState.CacheWriteFailed,
-                    ex.Message,
-                    "Free disk space or repair the cache path, then retry.",
-                    _deadLetterStore?.Count ?? 0,
-                    DeadLetterPath: _deadLetterStore?.Location));
-            }
+            try { remainder += source.Remainder; }
+            catch { remainder += DeliveryRemainder.Unknown; }
         }
-        return result;
+        return LastDrain = new(items, delivered, remainder, error);
     }
 
     private async Task<BatchResult<T>> ProcessBatchAsync(List<T> items, CancellationToken cancellationToken)
@@ -294,30 +193,6 @@ public sealed class UploadStream<T>
                 _deadLetterStore?.Count ?? 0,
                 DeadLetterPath: _deadLetterStore?.Location));
             return BatchResult<T>.Retry([item]);
-        }
-    }
-
-    private void PreserveFreshRetryItems(List<T> retryItems)
-    {
-        try
-        {
-            _cache.Add(retryItems);
-            Log.Information("{Count} 条{Label}已缓存到本地", retryItems.Count, _label);
-            RecoverTransientStatus(UploadStreamState.CacheWriteFailed);
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "{Label}缓存写入失败，{Count} 条重注入源 buffer", _label, retryItems.Count);
-            _source.Reinject(retryItems);
-            if (Status.State != UploadStreamState.UpdateRequired)
-            {
-                SetStatus(new UploadStreamStatus(
-                    UploadStreamState.CacheWriteFailed,
-                    ex.Message,
-                    "Free disk space or repair the cache path, then retry.",
-                    _deadLetterStore?.Count ?? 0,
-                    DeadLetterPath: _deadLetterStore?.Location));
-            }
         }
     }
 

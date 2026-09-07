@@ -75,7 +75,7 @@ namespace Heartbeat.Desktop.Windows.Hosting
                 var cachePath = Path.Combine(dataDirectory, "segments-cache.json");
                 return new JsonFileCache<ActivitySegmentItem>(
                     cachePath,
-                    maxItems: 20_000,
+                    maxItems: int.MaxValue,
                     HeartbeatCacheFormats.SegmentVersion2(),
                     HeartbeatCacheFormats.SegmentMigrations());
             });
@@ -111,10 +111,8 @@ namespace Heartbeat.Desktop.Windows.Hosting
                 var api = sp.GetRequiredService<HeartbeatApiClient>();
                 return new UploadStream<ActivitySegmentItem>(
                     "段",
-                    sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>(),
+                    [sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>()],
                     (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-                    sp.GetRequiredService<ICache<ActivitySegmentItem>>(),
-                    SnapshotCompaction.KeepLatest,
                     new JsonDeadLetterStore<ActivitySegmentItem>(
                         Path.Combine(dataDirectory, "segments-dead-letter.json")),
                     sp.GetRequiredService<UploadStatusRegistry>(),
@@ -125,9 +123,9 @@ namespace Heartbeat.Desktop.Windows.Hosting
                 var api = sp.GetRequiredService<HeartbeatApiClient>();
                 return new UploadStream<InputEventItem>(
                     "输入事件",
-                    sp.GetRequiredService<IUploadSource<InputEventItem>>(),
+                    [new CachedUploadSource<InputEventItem>(sp.GetRequiredService<ICache<InputEventItem>>()),
+                     sp.GetRequiredService<IUploadSource<InputEventItem>>()],
                     (batch, ct) => api.UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }, ct),
-                    sp.GetRequiredService<ICache<InputEventItem>>(),
                     deadLetterStore: new JsonDeadLetterStore<InputEventItem>(
                         Path.Combine(dataDirectory, "input-events-dead-letter.json")),
                     statusRegistry: sp.GetRequiredService<UploadStatusRegistry>(),

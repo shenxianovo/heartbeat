@@ -1,73 +1,77 @@
-# ADR-022: Upload Stream 自持退回重注入
+# ADR-022: 上传源保管数据，Upload Stream 确认交付
 
 ## Status: Accepted
 
-## Date: 2026-07-11
-
-> 2026-09-04 implementation note: `Drain()` 返回下一个 adapter-defined 出网批，不再承诺清空整个 backlog。InputEvent durable projection 每批最多 5,000 条并保留其余项；Upload Stream 对 413 递归拆批，只保留未送达项。Analytics 确认送达的 InputEvent FactId 另存有界 Delivery Receipt，阻止 Collector Runtime 启动回放把最近的已送达 Event 再塞回 pending；提交顺序保证收据故障最多导致幂等重传，不会吞掉未送达数据。
+## Date: 2026-07-11; amended 2026-09-07
 
 ## Context
 
-> 2026-09-07 implementation note: 周期 drain 与退出 drain 不得并发。退出先取消并等待周期上传
-> 归还未完成批次，再用 Host 的退出期限执行终态 drain；取消贯穿拆批、HTTP、声明和图标挂点。
-> 期限到达后停止出网，但仍完成本地保留：已成功项提交，未确认项留在缓存、持久源或重注入源。
-> 取消不能绕过“批次不蒸发”不变量，也不能以后台遗留上传替代完成退出。
+ADR-020 原来要求调用方把上传、缓存都失败的批次重注入 buffer。最初本 ADR 把这项义务收进
+Upload Stream，但普通源的破坏性 Drain 与持久源的保留读取仍有两套语义：流必须区分源类型，
+Segment 还需维护重注入版本戳与淘汰补偿账目。
 
-ADR-020 §5 的上传通道契约是"送达，或落离线缓存，否则原样退回——退回项由调用方重注入源 buffer"。2026-07 的架构评审发现这把"drain 后的批不静默蒸发"不变量摊在三个文件里：通道退回（`UploadChannel`）、编排者重注入（`UsageUploadWorker`）、两个 buffer 各自的幂等重入。理解"上传和缓存都失败会怎样"要同时读三处；而编排这一切的 `UsageUploadWorker` 构造依赖 6 个具体类（含拖着输入钩子的 `InputEventCollector`），防丢分支与 StopAsync 终态 drain 恰好是零覆盖区——ADR-020 §6 用注释钉住的"托管服务注册顺序翻转防丢尾巴"没有任何测试保护。
-
-两条流的 buffer 还各说各话：hub 是 `GetAndClearSegments`/`Accept`，输入侧是 `DrainAll`/`Requeue`（且藏在 collector 的两个纯转发方法后面）。worker 是唯一同时认识两套词汇的地方。
-
-顺带一个现存缺陷：上传失败的退回批经 `Accept` 重注入是 last-write-wins——批次在外面失败期间，hub 若已收到同 Id 的**更新**快照，退回的旧快照会把它覆盖（本地最长回滚 30s，下个快照追平；服务端有单调生长门兜底，ADR-018）。
+Ticket 04 的用户确认目标是解耦与可维护性，采用便于演化的结构。此次修订替代原先的
+Drain/Reinject 决定，不建设新的队列、恢复 UI 或完整退出策略。
 
 ## Decision
 
-### 1. `IUploadSource<T>` seam：出网源的统一词汇
+### 1. 上传源保留快照直到确认
 
-`Drain()`（破坏性取走）+ `Reinject(items)`（双失败退回）。hub 与 `InputEventBuffer` 以显式接口实现挂载，公开方法名不动（hub 词汇统一属 ADR-021 实施范围）——两个生产 adapter，真 seam。`InputEventBuffer` 升格 DI 单例：collector 只剩钩子生命周期（写入方），出网侧直接 drain buffer，两跳变一跳。
+`IUploadSource<T>` 统一为 `ReadBatch()` + `Confirm(items)`。读取不转移保管责任；只有 Analytics
+接收或成功写入 dead-letter 的项才被确认。确认失败允许按稳定 Id 重传，不能丢失未确认项。
+源同时提供当前 `Remainder` 与存储诊断，上传流无需知道源使用内存、文件还是持久投影。
 
-### 2. `UploadChannel` 演进为 `UploadStream`：不变量收进一个类
+SegmentIngestService 拥有 Segment 缓冲和现有 segments-cache 文件。启动压缩历史缓存后按 Id
+合并实时快照；读取时尝试持久化，失败仍保留内存并允许发送；确认先提交剩余缓存，再释放对应
+内存快照。确认通过对象身份只移除当时发送的版本，不删除发送期间到达的更高 Revision。
+原来跨重注入保存的弱引用版本戳与淘汰账目删除。读取每批最多 20,000 项，缓存与内存保留全部
+未确认 backlog。Fact 接纳限制仍在 Runtime 提交之前；Segment 投影发生在 Fact 提交之后，此时
+抛出“背压”无法让 Collector 重试，因此不能再以独立的 20,000 项存储上限拒收历史缓存与
+Runtime replay 的并集。Revision watermark 与重放协议保持原职责。
 
-流绑定自己的源。`DrainAsync()` 一轮 = 先重传离线缓存（成功清空，失败保留，ADR-008），再取 fresh 出网——送达，或落离线缓存，否则**流自己重注入源**。调用方从"必须记得重注入"（跨文件义务）变为"调用即安全"。`UploadAsync`/`UploadCachedAsync` 降为私有——接口收窄到一个方法。
+InputEventBuffer 的内存模式和持久模式都采用保留读取，每批最多 5,000 项，未读 backlog 仍由源
+保管。持久投影先移除已确认项，再写有界 Delivery Receipt；收据故障或裁剪最多导致稳定 FactId
+的幂等重传。现有投影 commit fence 不变。
 
-`DrainAsync` 返回 `UploadDrainResult`：保留本轮 fresh 批供图标挂点使用，同时分别报告 Analytics 已接收数量与
-owner 的交付余量。余量包括本地 cache、dead-letter、source backlog；source 自报持久保管证据，无法枚举时
-保留未知。它是这一轮结束时的快照，不能替代停产后末次交接，也不能把跨存储的副本数相加当作唯一 Fact 数量。
-`LastDrain` 保留结果供 hosted adapter 消费，执行期间为空；dead-letter 不计作 Analytics 已接收。
+历史 input-events-cache 文件由 CachedUploadSource 提供同一读取/确认接口，排在当前 InputEvent
+投影之前。它只服务已有版本遗留的重试数据，新输入不再写该文件。移除条件是完成已有安装中
+这类文件的交付或显式迁移，并保留启动重放、确认失败和重启不重复的验证；不能仅因新版本不写
+它就删除读取支持。
 
-2026-09-07 Ticket 04：426 只暂停出网，新批次继续交给本地缓存；迁移失败保留原缓存和未知余量。
-JsonFileCache 超限拒绝整个写入，不能静默裁剪未交付项；已送达收据的有界裁剪由 InputEvent owner 自己执行。
-Desktop 与 Headless 复用 `PeriodicUploadWorker` 的取消、归还和终态 drain 顺序。已关闭 Input Recording 时仍按
-既有策略不读取或上传输入缓存，adapter 不沿用此前的成功结果，报告尚无本轮交付证据。
+### 2. Upload Stream 只编排传输与确认
 
-### 3. 重注入不回滚
+每轮依次读取源、发送、确认已处理项。Segment 的历史和实时项已经在 owner 内合并，不再分成
+缓存与 fresh 两次请求；InputEvent 历史文件仍先于当前投影。缓存读写、容量和保管证据属于源。
+400/422 拆批定位坏记录，413 拆批缩小请求，单项仍过大则保留。426 暂停出网，但 Segment 源仍可
+持久化新项。取消贯穿拆批和 HTTP，期限到达后停止发送，源保留未确认项。
 
-hub 的 `Reinject`：缺席才插入，在位者保留 EndTime 更晚的快照——与服务端单调生长门同一条规则（ADR-018），客户端侧补齐对称性，消除 30s 回滚窗口。退回批**不再过门卫**：已过一次校验，重过滤可能丢数据，违背不蒸发不变量。输入事件无快照概念，保 Id 回队不变。
+`UploadDrainResult` 报告本轮读取项、Analytics 接收数量及各 owner 的当前余量，供 hosted adapter
+和图标挂点消费。dead-letter 属于本地保管，不计作 Analytics 接收。余量包含未读取的 backlog，
+无法枚举时保留未知；下一轮重新读取 owner 证据，不用永久置空的 latch 代替真实状态。
+副本数不能当作跨存储唯一 Fact 数。`LastDrain` 在执行期间为空，末次结果也不能代替停产后的交接。
 
-### 4. cached-first 从跨流全局变为每流局部
+### 3. Worker 只调度
 
-原顺序（input-cached → segment-cached → input-fresh → segment-fresh）变为每流内部 cached → fresh。时序有序性只需流内保证，两条流写不同的表，跨流顺序无意义。
-
-### 5. worker 退化为调度器
-
-循环体收敛为 `DrainOnceAsync()`（两条流各一轮 + 图标挂点），StopAsync 终态 drain 复用同一入口。更名（"usage"化石）与 worker 测试属后续切片。
+Desktop 与 Headless 复用 PeriodicUploadWorker，退出先取消并等待周期上传结束，再以退出期限执行
+终态上传。Input Recording 关闭时仍按既有策略不读、不上传输入 backlog，不能沿用旧的成功结果。
+应用退出的跨子树汇总与最终动作由 Ticket 05 承接。
 
 ## Consequences
 
-- ✅ "批次不蒸发"从三处未测的跨文件义务收敛为一个类 + 一份契约测试（双失败重注入、cached-first、compact 只作用于 cached 首次全部钉死）。
-- ✅ 出网侧统一词汇；collector 纯转发层消失；30s 本地回滚窗口消除。
-- ✅ worker 依赖从 6 个具体类降到 4 个，可测性前提就位（注册顺序脆弱点将由 worker 测试钉住）。
-- ⚠️ 跨流 cached 顺序变化（无关正确性，两条流不同表）。
-- ⚠️ 改名 churn：`UploadChannel` → `UploadStream`（类、测试、词条），Upload Channel 旧词标 _Avoid_。
+- 删除源类型分支、重注入、Segment 淘汰补偿和上传流中的独立缓存提交路径。
+- 保管证据可随源恢复而重新判定；晚到确认不会覆盖或移除新快照。
+- Segment 待确认项与磁盘缓存由同一 owner 维护；缓存提交失败可能重复发送已被 Analytics 接收的
+  稳定 Id。投影阶段不能伪造接纳背压；长期离线 backlog 会占用对应内存和磁盘。未来容量策略需
+  落在实际可重试的 Fact 接纳边界，本片不添加新队列或补投影调度。
+- 验证围绕真实源的 Fact/Upload 边界、HTTP 契约及真实 Host 组合，不模拟两套保管策略。
 
 ## References
 
-- [`collection/hub/Heartbeat.Collection.Hub/Upload/IUploadSource.cs`](../../collection/hub/Heartbeat.Collection.Hub/Upload/IUploadSource.cs) — 出网源 seam（§1）
-- [`collection/hub/Heartbeat.Collection.Hub/Upload/UploadStream.cs`](../../collection/hub/Heartbeat.Collection.Hub/Upload/UploadStream.cs) — 上传流：drain 一轮自持不变量（§2）
-- [`collection/hub/Heartbeat.Collection.Hub/Segments/SegmentIngestService.cs`](../../collection/hub/Heartbeat.Collection.Hub/Segments/SegmentIngestService.cs) — hub 的 Drain/Reinject adapter，不回滚规则（§3）
-- [`collection/desktop/Heartbeat.Collector.System/Input/InputEventBuffer.cs`](../../collection/desktop/Heartbeat.Collector.System/Input/InputEventBuffer.cs) — 输入侧 adapter，共享单例（§1）
-- [`collection/hub/Heartbeat.Collection.Hub/Runtime/UploadWorker.cs`](../../collection/hub/Heartbeat.Collection.Hub/Runtime/UploadWorker.cs) — 调度器 + 图标挂点（§5，更名自 UsageUploadWorker）
-- [`collection/hub/Heartbeat.Collection.Hub.Tests/Upload/UploadStreamTests.cs`](../../collection/hub/Heartbeat.Collection.Hub.Tests/Upload/UploadStreamTests.cs) — 流契约测试（§2）
-- [`collection/desktop/Heartbeat.Desktop.Windows.Tests/Hosting/AgentHostExtensionsTests.cs`](../../collection/desktop/Heartbeat.Desktop.Windows.Tests/Hosting/AgentHostExtensionsTests.cs) — 注册顺序不变量测试（ADR-020 §6 脆弱点）
-- Amends [ADR-020](./020-system-collector-through-hub.md) §5 —— "退回项由调用方重注入"收进流自持；通道其余契约（送达/缓存/compact 按流策略）不变
-- [ADR-018](./018-stable-segment-identity-snapshot-upload.md) —— 不回滚规则是其单调生长门在客户端的对称
-- [ADR-008](./008-local-cache-offline-retry.md) —— 缓存重传语义不变
+- [IUploadSource](../../collection/hub/Heartbeat.Collection.Hub/Upload/IUploadSource.cs)
+- [UploadStream](../../collection/hub/Heartbeat.Collection.Hub/Upload/UploadStream.cs)
+- [SegmentIngestService](../../collection/hub/Heartbeat.Collection.Hub/Segments/SegmentIngestService.cs)
+- [InputEventBuffer](../../collection/desktop/Heartbeat.Collector.System/Input/InputEventBuffer.cs)
+- [UploadStreamTests](../../collection/hub/Heartbeat.Collection.Hub.Tests/Upload/UploadStreamTests.cs)
+- Amends [ADR-020](./020-system-collector-through-hub.md) §5 的破坏性读取/重注入约定
+- [ADR-018](./018-stable-segment-identity-snapshot-upload.md) 的稳定 Segment Id
+- [ADR-008](./008-local-cache-offline-retry.md) 的离线保管与重传

@@ -75,7 +75,7 @@ public static class MacAgentHostExtensions
         services.TryAddSingleton<ICache<ActivitySegmentItem>>(sp =>
             new JsonFileCache<ActivitySegmentItem>(
                 Path.Combine(sp.GetRequiredService<MacAgentPaths>().DataDirectory, "segments-cache.json"),
-                20_000,
+                int.MaxValue,
                 HeartbeatCacheFormats.SegmentVersion2(),
                 HeartbeatCacheFormats.SegmentMigrations()));
         services.TryAddSingleton<ICache<InputEventItem>>(sp =>
@@ -104,11 +104,9 @@ public static class MacAgentHostExtensions
             var root = sp.GetRequiredService<MacAgentPaths>().DataDirectory;
             return new UploadStream<ActivitySegmentItem>(
                 "段",
-                sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>(),
+                [sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>()],
                 (batch, ct) => sp.GetRequiredService<HeartbeatApiClient>()
                     .UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-                sp.GetRequiredService<ICache<ActivitySegmentItem>>(),
-                Heartbeat.Core.SnapshotCompaction.KeepLatest,
                 new JsonDeadLetterStore<ActivitySegmentItem>(Path.Combine(root, "segments-dead-letter.json")),
                 sp.GetRequiredService<UploadStatusRegistry>(),
                 sp.GetRequiredService<ClientCompatibilityStatus>());
@@ -118,10 +116,10 @@ public static class MacAgentHostExtensions
             var root = sp.GetRequiredService<MacAgentPaths>().DataDirectory;
             return new UploadStream<InputEventItem>(
                 "输入事件",
-                sp.GetRequiredService<IUploadSource<InputEventItem>>(),
+                [new CachedUploadSource<InputEventItem>(sp.GetRequiredService<ICache<InputEventItem>>()),
+                 sp.GetRequiredService<IUploadSource<InputEventItem>>()],
                 (batch, ct) => sp.GetRequiredService<HeartbeatApiClient>()
                     .UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }, ct),
-                sp.GetRequiredService<ICache<InputEventItem>>(),
                 deadLetterStore: new JsonDeadLetterStore<InputEventItem>(Path.Combine(root, "input-events-dead-letter.json")),
                 statusRegistry: sp.GetRequiredService<UploadStatusRegistry>(),
                 compatibilityStatus: sp.GetRequiredService<ClientCompatibilityStatus>());

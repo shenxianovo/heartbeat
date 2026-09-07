@@ -159,7 +159,7 @@ public sealed class ExternalHostCollectorProtocolHandlerTests
         await fixture.PublishAsync(second, "two|play");
 
         // Stream 的 identifying dimension 是宿主注入的，因此事实归属不依赖 Collector 自报 payload。
-        var segments = fixture.Sink.GetAndClearSegments();
+        var segments = fixture.Sink.ReadBatch();
         Assert.Equal(2, segments.Count);
         var streams = fixture.Runtime.DescribeExternalHostInstance(
             fixture.Runtime.ListInstances().Single().CollectorInstanceId);
@@ -224,12 +224,12 @@ public sealed class ExternalHostCollectorProtocolHandlerTests
         // 旧连接已经不是 writer 了，它的写入必须被拒。
         var stale = await fixture.TryPublishAsync(first, "one|stale");
         Assert.Equal(409, stale.StatusCode);
-        Assert.Empty(fixture.Sink.GetAndClearSegments());
+        Assert.Empty(fixture.Sink.ReadBatch());
 
         // 被替换的一方交还了 writer lease，接管者能立刻写入；旁人的连接不受影响。
         await fixture.PublishAsync(replacement, "one|after-replacement");
         await fixture.PublishAsync(other, "two|untouched");
-        Assert.Equal(2, fixture.Sink.GetAndClearSegments().Count);
+        Assert.Equal(2, fixture.Sink.ReadBatch().Count);
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public sealed class ExternalHostCollectorProtocolHandlerTests
         Assert.Equal("external_host_identity_conflict", status.Failure?.Code);
         Assert.Contains(HandlerFixture.DefaultHostIdentity, status.Failure?.Message);
         await fixture.PublishAsync(current, "still-owned");
-        Assert.Single(fixture.Sink.GetAndClearSegments());
+        Assert.Single(fixture.Sink.ReadBatch());
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public sealed class ExternalHostCollectorProtocolHandlerTests
         // Instance 没了，挂在它上面的 External Host 一个都不剩，两条旧连接也都写不进来了。
         Assert.Equal(409, (await fixture.TryPublishAsync(first, "one|after-uninstall")).StatusCode);
         Assert.Equal(409, (await fixture.TryPublishAsync(second, "two|after-uninstall")).StatusCode);
-        Assert.Empty(fixture.Sink.GetAndClearSegments());
+        Assert.Empty(fixture.Sink.ReadBatch());
 
         // 卸载成功之后，旧连接重连拿到的是「没装」，不是被悄悄重建的 Instance。
         var response = await fixture.HelloAsync();

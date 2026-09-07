@@ -1,73 +1,28 @@
+using System.Net;
+using System.Text.Json;
 using Heartbeat.Core;
 using Heartbeat.Core.DTOs.Segments;
 using Heartbeat.Collection.Hub.Http;
 using Heartbeat.Collection.Hub.Storage;
 using Heartbeat.Collection.Hub.Upload;
-using System.Net;
-using System.Text.Json;
+using Heartbeat.Collection.Hub.Segments;
+using Heartbeat.Collection.Hub.Time;
 
 namespace Heartbeat.Collection.Hub.Tests.Upload;
 
-/// <summary>
-/// 上传流契约（ADR-020/022）：drain 一轮 = 先重传缓存，再取 fresh 出网——
-/// 送达，或落离线缓存，否则重注入源。"批次不蒸发"由流自持。
-/// 经真实 HeartbeatApiClient + 桩 HttpMessageHandler 驱动，传输层（URL/负载）一并覆盖。
-/// </summary>
 public class UploadStreamTests : IDisposable
 {
-    private readonly string _tempDirectory = Path.Combine(
-        Path.GetTempPath(), $"heartbeat-upload-tests-{Guid.NewGuid()}");
-
+    private readonly string _tempDirectory = Path.Combine(Path.GetTempPath(), $"heartbeat-upload-tests-{Guid.NewGuid()}");
     public UploadStreamTests() => Directory.CreateDirectory(_tempDirectory);
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDirectory)) Directory.Delete(_tempDirectory, recursive: true);
-    }
-
-    private sealed class FakeSource : IUploadSource<ActivitySegmentItem>
-    {
-        public List<ActivitySegmentItem> Items { get; } = [];
-        public List<ActivitySegmentItem> Reinjected { get; } = [];
-        public DeliveryRemainder Remainder => new(0, Items.Count + Reinjected.Count);
-
-        public List<ActivitySegmentItem> Drain()
-        {
-            var copy = new List<ActivitySegmentItem>(Items);
-            Items.Clear();
-            return copy;
-        }
-
-        public void Reinject(List<ActivitySegmentItem> items) => Reinjected.AddRange(items);
-    }
-
-    private sealed class FakeDurableSource : IDurableUploadSource<ActivitySegmentItem>
-    {
-        public List<ActivitySegmentItem> Items { get; } = [];
-        public DeliveryRemainder Remainder => new(Items.Count, 0);
-        public List<ActivitySegmentItem> Drain() => new(Items);
-        public void Reinject(List<ActivitySegmentItem> items) => Items.AddRange(items);
-
-        public void CompleteDrain(
-            IReadOnlyList<ActivitySegmentItem> drained,
-            IReadOnlyList<ActivitySegmentItem> retryItems)
-        {
-            var drainedIds = drained.Select(item => item.Id).ToHashSet();
-            var retryIds = retryItems.Select(item => item.Id).ToHashSet();
-            Items.RemoveAll(item => drainedIds.Contains(item.Id) && !retryIds.Contains(item.Id));
-        }
-    }
-
+    public void Dispose() => Directory.Delete(_tempDirectory, recursive: true);
     private sealed class FakeCache : ICache<ActivitySegmentItem>
     {
         public List<ActivitySegmentItem> Items { get; private set; } = [];
-        public bool ThrowOnAdd { get; set; }
         public bool ThrowOnReplace { get; set; }
         public CacheFileStatus Status { get; set; } = CacheFileStatus.Ready;
 
         public void Add(List<ActivitySegmentItem> items)
         {
-            if (ThrowOnAdd) throw new IOException("disk full");
             Items.AddRange(items);
         }
 
@@ -126,14 +81,6 @@ public class UploadStreamTests : IDisposable
         }
     }
 
-    private sealed class ThrowingDeadLetterStore<T> : IDeadLetterStore<T>
-    {
-        public int Count => 0;
-        public string? Location => "unavailable-dead-letter.json";
-        public void Append(string stream, T item, ApiResult rejection) =>
-            throw new IOException("dead-letter disk full");
-    }
-
     private sealed class FlakyDeadLetterStore<T> : IDeadLetterStore<T>
     {
         public int FailuresRemaining { get; set; } = 1;
@@ -145,23 +92,6 @@ public class UploadStreamTests : IDisposable
             if (FailuresRemaining-- > 0) throw new IOException("temporarily unavailable");
             Count++;
         }
-    }
-
-    private static (UploadStream<ActivitySegmentItem> stream, FakeSource source, FakeCache cache, CapturingHandler handler) Build(HttpStatusCode status)
-    {
-        var handler = new CapturingHandler(status);
-        var api = new HeartbeatApiClient(new HttpClient(handler));
-        var source = new FakeSource();
-        var cache = new FakeCache();
-
-        // 与 AgentHostExtensions 的段流同构：compact 策略 = KeepLatest，只作用于出缓存的批
-        var stream = new UploadStream<ActivitySegmentItem>(
-            "段",
-            source,
-            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-            cache,
-            SnapshotCompaction.KeepLatest);
-        return (stream, source, cache, handler);
     }
 
     private static ActivitySegmentItem Segment(Guid? id = null, int endSec = 60)
@@ -196,206 +126,14 @@ public class UploadStreamTests : IDisposable
         HeartbeatCacheFormats.SegmentVersion2(),
         HeartbeatCacheFormats.SegmentMigrations());
 
-    private UploadStream<ActivitySegmentItem> RealStream(
-        FakeSource source,
-        string cachePath,
-        string deadLetterPath,
-        HttpMessageHandler handler,
-        UploadStatusRegistry? statusRegistry = null)
+    private UploadStream<ActivitySegmentItem> Stream(
+        SegmentIngestService source, HttpMessageHandler handler,
+        IDeadLetterStore<ActivitySegmentItem>? deadLetters = null)
     {
         var api = new HeartbeatApiClient(new HttpClient(handler));
-        return new UploadStream<ActivitySegmentItem>(
-            "segments",
-            source,
+        return new("segments", [source],
             (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-            RealCache(cachePath),
-            SnapshotCompaction.KeepLatest,
-            new JsonDeadLetterStore<ActivitySegmentItem>(deadLetterPath),
-            statusRegistry);
-    }
-
-    [Fact]
-    public async Task Drain_PauseInsideSplit_PreservesEarlierDeliveryEvidence()
-    {
-        var source = new FakeSource();
-        source.Items.AddRange(Enumerable.Range(0, 4).Select(_ => Segment()));
-        var singles = 0;
-        var stream = new UploadStream<ActivitySegmentItem>("segments", source,
-            (batch, _) => Task.FromResult(batch.Count > 1 ? new ApiResult(false, 413) :
-                ++singles == 1 ? ApiResult.Ok : new ApiResult(false, 426)), new FakeCache());
-
-        var result = await stream.DrainAsync();
-
-        Assert.Equal(1, result.DeliveredCount);
-        Assert.Equal(new DeliveryRemainder(3, 0), result.Remainder);
-    }
-
-    [Fact]
-    public async Task Drain_PartialRejection_DistinguishesAnalyticsDeliveryFromLocalCustody()
-    {
-        var source = new FakeSource();
-        source.Items.AddRange([Segment(), Segment()]);
-        var sends = 0;
-        var stream = new UploadStream<ActivitySegmentItem>("segments", source,
-            (_, _) => Task.FromResult(++sends == 2 ? ApiResult.Ok : new ApiResult(false, 422, "invalid")),
-            new FakeCache(), deadLetterStore: new JsonDeadLetterStore<ActivitySegmentItem>(
-                Path.Combine(_tempDirectory, "rejected.json")));
-
-        var result = await stream.DrainAsync();
-
-        Assert.Equal(1, result.DeliveredCount);
-        Assert.Equal(1, result.Remainder.RetainedLocally);
-        Assert.Equal(0, result.Remainder.Unconfirmed);
-        Assert.Same(result, stream.LastDrain);
-    }
-
-    [Fact]
-    public async Task Drain_WhenTransportThrows_PreservesTheFreshBatch()
-    {
-        var source = new FakeSource();
-        var item = Segment();
-        source.Items.Add(item);
-        var cache = new FakeCache();
-        var stream = new UploadStream<ActivitySegmentItem>("segments", source,
-            (_, _) => throw new IOException("transport failed before returning a response"), cache);
-
-        await stream.DrainAsync();
-
-        Assert.Equal(item.Id, Assert.Single(cache.Items).Id);
-    }
-
-    [Fact]
-    public async Task Drain_Success_SendsFresh_EmptiesSource_DoesNotCache()
-    {
-        var (stream, source, cache, handler) = Build(HttpStatusCode.OK);
-        source.Items.AddRange([Segment(), Segment()]);
-
-        var drained = await stream.DrainAsync();
-
-        Assert.Equal(2, drained.FreshItems.Count);       // 返回本轮取走的 fresh 批（图标挂点用）
-        Assert.Empty(source.Items);
-        Assert.Empty(source.Reinjected);
-        Assert.Empty(cache.Items);
-        var req = Assert.Single(handler.Requests);
-        Assert.EndsWith("/api/v1/segments", req.Url);
-    }
-
-    [Fact]
-    public async Task Drain_SendFails_CachesItems_NoReinject()
-    {
-        var (stream, source, cache, _) = Build(HttpStatusCode.InternalServerError);
-        source.Items.AddRange([Segment(), Segment()]);
-
-        var drained = await stream.DrainAsync();
-
-        Assert.Equal(2, drained.FreshItems.Count);
-        Assert.Equal(2, cache.Items.Count);
-        Assert.Empty(source.Reinjected);
-    }
-
-    [Fact]
-    public async Task DurableSource_CommitsSuccess_AndRetainsRetryWithoutCopyingToCache()
-    {
-        var cache = new FakeCache();
-        var source = new FakeDurableSource();
-        var item = Segment();
-        source.Items.Add(item);
-        var attempts = 0;
-        var stream = new UploadStream<ActivitySegmentItem>(
-            "段",
-            source,
-            (_, _) => Task.FromResult(++attempts == 1
-                ? new ApiResult(false, 500)
-                : ApiResult.Ok),
-            cache);
-
-        await stream.DrainAsync();
-        Assert.Equal(item.Id, Assert.Single(source.Items).Id);
-        Assert.Empty(cache.Items);
-
-        await stream.DrainAsync();
-        Assert.Empty(source.Items);
-        Assert.Empty(cache.Items);
-    }
-
-    [Fact]
-    public async Task Drain_DoubleFailure_ReinjectsToSource()
-    {
-        // 不蒸发不变量（ADR-022）：既没送达也没缓存住 → 流自己重注入源
-        var (stream, source, cache, _) = Build(HttpStatusCode.InternalServerError);
-        cache.ThrowOnAdd = true;
-        var a = Segment();
-        var b = Segment();
-        source.Items.AddRange([a, b]);
-
-        var drained = await stream.DrainAsync();
-
-        Assert.Equal(2, drained.FreshItems.Count);
-        Assert.Equal(2, source.Reinjected.Count);
-        Assert.Same(a, source.Reinjected[0]); // 原样退回，不复制不丢字段
-        Assert.Same(b, source.Reinjected[1]);
-    }
-
-    [Fact]
-    public async Task Drain_EmptySourceAndCache_NoRequest()
-    {
-        var (stream, _, _, handler) = Build(HttpStatusCode.OK);
-
-        var drained = await stream.DrainAsync();
-
-        Assert.Empty(drained.FreshItems);
-        Assert.Empty(handler.Requests);
-    }
-
-    [Fact]
-    public async Task Drain_RetriesCachedFirst_ThenFresh_ClearsCache()
-    {
-        // cached 先于 fresh（流内局部时序，ADR-022）：离线恢复后先清积压
-        var (stream, source, cache, handler) = Build(HttpStatusCode.OK);
-        var cachedSeg = Segment();
-        var freshSeg = Segment();
-        cache.Add([cachedSeg]);
-        source.Items.Add(freshSeg);
-
-        await stream.DrainAsync();
-
-        Assert.Equal(2, handler.Requests.Count);
-        Assert.Equal(cachedSeg.Id, Assert.Single(ParseBody(handler.Requests[0].Body).Segments).Id);
-        Assert.Equal(freshSeg.Id, Assert.Single(ParseBody(handler.Requests[1].Body).Segments).Id);
-        Assert.Empty(cache.Items);
-    }
-
-    [Fact]
-    public async Task Drain_CachedSendFails_KeepsCache_StillDrainsFresh()
-    {
-        var (stream, source, cache, handler) = Build(HttpStatusCode.InternalServerError);
-        cache.Add([Segment(), Segment()]);
-        source.Items.Add(Segment());
-
-        await stream.DrainAsync();
-
-        // 缓存重传失败：保留不清（ADR-008）；fresh 照常尝试，失败后追加入缓存
-        Assert.Equal(2, handler.Requests.Count);
-        Assert.Equal(3, cache.Items.Count);
-        Assert.Empty(source.Reinjected);
-    }
-
-    [Fact]
-    public async Task Drain_CompactsCachedBatchOnly_NotFresh()
-    {
-        // 缓存纯追加，离线期间积累同 Id 快照 → 出网前 KeepLatest（ADR-018）；
-        // fresh 批来自按 Id 键控的 buffer，天然无重复，不压缩
-        var (stream, source, cache, handler) = Build(HttpStatusCode.OK);
-        var id = Guid.CreateVersion7();
-        cache.Add([Segment(id, endSec: 30), Segment(id, endSec: 60), Segment(id, endSec: 90)]);
-        source.Items.AddRange([Segment(), Segment()]);
-
-        await stream.DrainAsync();
-
-        Assert.Equal(2, handler.Requests.Count);
-        var cachedSent = Assert.Single(ParseBody(handler.Requests[0].Body).Segments);
-        Assert.Equal(id, cachedSent.Id);
-        Assert.Equal(2, ParseBody(handler.Requests[1].Body).Segments.Count);
+            deadLetters ?? new JsonDeadLetterStore<ActivitySegmentItem>(Path.Combine(_tempDirectory, "dead-letter.json")));
     }
 
     [Theory]
@@ -403,43 +141,272 @@ public class UploadStreamTests : IDisposable
     [InlineData(HttpStatusCode.RequestTimeout)]
     [InlineData(HttpStatusCode.TooManyRequests)]
     [InlineData(HttpStatusCode.InternalServerError)]
-    public async Task RetryableHttpFailure_RetainsBatch_AndRestartUploadsIt(HttpStatusCode failure)
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task RetryableFailure_RetainsBatch_AndRestartUploadsStableIds(HttpStatusCode failure)
     {
-        var cachePath = Path.Combine(_tempDirectory, $"retry-{(int)failure}.json");
-        var deadLetterPath = cachePath + ".dead-letter.json";
-        var source = new FakeSource();
-        var segment = Segment();
-        source.Items.Add(segment);
-        var failing = new ControlledHandler((_, _, _) => new HttpResponseMessage(failure));
-
-        await RealStream(source, cachePath, deadLetterPath, failing).DrainAsync();
-
-        Assert.Equal(segment.Id, Assert.Single(RealCache(cachePath).Load()).Id);
-
-        var recoveredSource = new FakeSource();
-        var recovered = new ControlledHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.OK));
-        await RealStream(recoveredSource, cachePath, deadLetterPath, recovered).DrainAsync();
-
-        Assert.Empty(RealCache(cachePath).Load());
-        Assert.Equal(segment.Id, Assert.Single(ParseBody(Assert.Single(recovered.RequestBodies)).Segments).Id);
+        var path = Path.Combine(_tempDirectory, "segments.json");
+        using var cache = RealCache(path);
+        var source = new SegmentIngestService(new SystemClock(), cache);
+        var item = Segment();
+        source.Accept([item]);
+        var result = await Stream(source, new CapturingHandler(failure)).DrainAsync();
+        Assert.Equal(0, result.DeliveredCount);
+        Assert.Equal(new DeliveryRemainder(1, 0), result.Remainder);
+        using var recovered = RealCache(path);
+        var restart = new SegmentIngestService(new SystemClock(), recovered);
+        var handler = new CapturingHandler(HttpStatusCode.OK);
+        var delivered = await Stream(restart, handler).DrainAsync();
+        Assert.Equal(item.Id, Assert.Single(ParseBody(Assert.Single(handler.Requests).Body).Segments!).Id);
+        Assert.Equal(1, delivered.DeliveredCount);
+        Assert.True(delivered.Remainder.IsEmpty);
+        Assert.Empty(recovered.Load());
     }
 
     [Fact]
-    public async Task Restart_CompactsCachedSnapshotsBeforeUpload()
+    public async Task UnexpectedTransportException_PreservesBatch_AndLaterSuccessClearsEvidence()
     {
-        var cachePath = Path.Combine(_tempDirectory, "restart-compaction.json");
-        var id = Guid.CreateVersion7();
-        using (var cache = RealCache(cachePath))
-            cache.Add([Segment(id, 30), Segment(id, 60), Segment(id, 90)]);
-        var handler = new ControlledHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.OK));
+        var source = new SegmentIngestService(new SystemClock());
+        var item = Segment();
+        source.Accept([item]);
+        var fail = true;
+        var stream = new UploadStream<ActivitySegmentItem>("segments", [source], (_, _) =>
+            fail ? throw new InvalidOperationException("unexpected transport failure") : Task.FromResult(ApiResult.Ok));
+        var failed = await stream.DrainAsync();
+        Assert.Equal(new DeliveryRemainder(0, 1), failed.Remainder);
+        Assert.Same(item, Assert.Single(source.ReadBatch()));
+        fail = false;
+        Assert.True((await stream.DrainAsync()).Remainder.IsEmpty);
+    }
 
-        await RealStream(
-            new FakeSource(), cachePath, cachePath + ".dead-letter.json", handler).DrainAsync();
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    public async Task PermanentRejection_ConfirmsValidItems_AndQuarantinesOnlyPoison(HttpStatusCode rejection)
+    {
+        var source = new SegmentIngestService(new SystemClock());
+        var good = Segment();
+        var poison = Segment();
+        source.Accept([good, poison]);
+        var handler = new ControlledHandler((_, body, _) => new HttpResponseMessage(
+            ParseBody(body).Segments!.Any(item => item.Id == poison.Id) ? rejection : HttpStatusCode.OK));
+        var stream = Stream(source, handler);
+        var result = await stream.DrainAsync();
+        Assert.Equal(1, result.DeliveredCount);
+        Assert.Equal(new DeliveryRemainder(1, 0), result.Remainder);
+        Assert.Equal(1, stream.Status.DeadLetterCount);
+        Assert.Empty(source.ReadBatch());
+        Assert.Equal(3, handler.RequestBodies.Count);
+    }
 
-        var uploaded = Assert.Single(ParseBody(Assert.Single(handler.RequestBodies)).Segments);
-        Assert.Equal(id, uploaded.Id);
-        Assert.Equal(90, (uploaded.EndTime - uploaded.StartTime).TotalSeconds);
-        Assert.Empty(RealCache(cachePath).Load());
+    [Fact]
+    public async Task PayloadTooLarge_SplitsUntilAccepted_WithoutRetryingSuccessfulItems()
+    {
+        var source = new SegmentIngestService(new SystemClock());
+        source.Accept(Enumerable.Range(0, 8).Select(_ => Segment()).ToList());
+        var handler = new ControlledHandler((_, body, _) => new HttpResponseMessage(
+            ParseBody(body).Segments!.Count > 2 ? HttpStatusCode.RequestEntityTooLarge : HttpStatusCode.OK));
+        var stream = Stream(source, handler);
+        var result = await stream.DrainAsync();
+        Assert.Equal(8, result.DeliveredCount);
+        Assert.True(result.Remainder.IsEmpty);
+        Assert.Equal(7, handler.RequestBodies.Count);
+        await stream.DrainAsync();
+        Assert.Equal(7, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task OversizedSingleRecord_RemainsPending()
+    {
+        var source = new SegmentIngestService(new SystemClock());
+        source.Accept([Segment()]);
+        var result = await Stream(source, new CapturingHandler(HttpStatusCode.RequestEntityTooLarge)).DrainAsync();
+        Assert.Equal(0, result.DeliveredCount);
+        Assert.Equal(new DeliveryRemainder(0, 1), result.Remainder);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Split_CancellationOrPause_PreservesEarlierSuccessAndUnsentTail(bool cancel)
+    {
+        using var cts = new CancellationTokenSource();
+        var source = new SegmentIngestService(new SystemClock());
+        var items = Enumerable.Range(0, 4).Select(_ => Segment()).ToList();
+        source.Accept(items);
+        var calls = 0;
+        var stream = new UploadStream<ActivitySegmentItem>("segments", [source], (batch, _) =>
+        {
+            calls++;
+            if (batch.Count > 1) return Task.FromResult(new ApiResult(false, 422));
+            if (batch[0].Id == items[0].Id) return Task.FromResult(ApiResult.Ok);
+            if (cancel) cts.Cancel();
+            return Task.FromResult(new ApiResult(false, cancel ? 503 : 426));
+        });
+        var result = await stream.DrainAsync(cts.Token);
+        Assert.Equal(1, result.DeliveredCount);
+        Assert.Equal(3, result.Remainder.Unconfirmed);
+        Assert.Equal(items.Skip(1).Select(item => item.Id), source.ReadBatch().Select(item => item.Id));
+        Assert.Equal(4, calls);
+    }
+
+    [Fact]
+    public async Task Pause_PersistsNewArrivals_AndRestartResumes()
+    {
+        var path = Path.Combine(_tempDirectory, "paused.json");
+        using var cache = RealCache(path);
+        var source = new SegmentIngestService(new SystemClock(), cache);
+        source.Accept([Segment()]);
+        var handler = new CapturingHandler(HttpStatusCode.UpgradeRequired);
+        var stream = Stream(source, handler);
+        await stream.DrainAsync();
+        source.Accept([Segment()]);
+        Assert.Equal(new DeliveryRemainder(2, 0), (await stream.DrainAsync()).Remainder);
+        Assert.Single(handler.Requests);
+        using var recovered = RealCache(path);
+        var restarted = Stream(new SegmentIngestService(new SystemClock(), recovered), new CapturingHandler(HttpStatusCode.OK));
+        Assert.True((await restarted.DrainAsync()).Remainder.IsEmpty);
+    }
+
+    [Fact]
+    public async Task Confirmation_DoesNotRemoveCorrectionArrivingDuringSend()
+    {
+        var cache = new FakeCache();
+        var source = new SegmentIngestService(new SystemClock(), cache);
+        var original = Segment(endSec: 120);
+        var corrected = Segment(original.Id, endSec: 30);
+        source.UpsertDurable(original, 1);
+        var stream = new UploadStream<ActivitySegmentItem>("segments", [source], (_, _) =>
+        {
+            source.UpsertDurable(corrected, 2);
+            return Task.FromResult(ApiResult.Ok);
+        });
+        var result = await stream.DrainAsync();
+        Assert.Equal(1, result.DeliveredCount);
+        Assert.Equal(new DeliveryRemainder(1, 0), result.Remainder);
+        Assert.Same(corrected, Assert.Single(cache.Load()));
+        Assert.Same(corrected, Assert.Single(source.ReadBatch()));
+    }
+
+    [Fact]
+    public async Task CacheFailure_KeepsMemoryCustody_AndRecoversAfterRepair()
+    {
+        var cache = new FakeCache { ThrowOnReplace = true };
+        var source = new SegmentIngestService(new SystemClock(), cache);
+        var item = Segment();
+        source.Accept([item]);
+        var stream = Stream(source, new CapturingHandler(HttpStatusCode.ServiceUnavailable));
+        var failed = await stream.DrainAsync();
+        Assert.Equal(new DeliveryRemainder(0, 1), failed.Remainder);
+        Assert.Equal(UploadStreamState.CacheWriteFailed, stream.Status.State);
+        cache.ThrowOnReplace = false;
+        var recovered = await stream.DrainAsync();
+        Assert.Equal(new DeliveryRemainder(1, 0), recovered.Remainder);
+        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
+    }
+
+    [Fact]
+    public async Task ConfirmationWriteFailure_ReplaysSuccessfulBatchUntilCommitSucceeds()
+    {
+        var cache = new FakeCache();
+        var source = new SegmentIngestService(new SystemClock(), cache);
+        source.Accept([Segment()]);
+        var fail = true;
+        var stream = new UploadStream<ActivitySegmentItem>("segments", [source], (_, _) =>
+        {
+            cache.ThrowOnReplace = fail;
+            return Task.FromResult(ApiResult.Ok);
+        });
+        var result = await stream.DrainAsync();
+        Assert.Equal(1, result.DeliveredCount);
+        Assert.NotNull(result.Error);
+        Assert.Equal(new DeliveryRemainder(1, 0), result.Remainder);
+        fail = false;
+        cache.ThrowOnReplace = false;
+        Assert.True((await stream.DrainAsync()).Remainder.IsEmpty);
+        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
+    }
+
+    [Fact]
+    public async Task DeadLetterFailure_RetainsRejectedRecord_AndRecoversAfterRepair()
+    {
+        var source = new SegmentIngestService(new SystemClock(), new FakeCache());
+        source.Accept([Segment()]);
+        var deadLetters = new FlakyDeadLetterStore<ActivitySegmentItem>();
+        var stream = Stream(source, new CapturingHandler(HttpStatusCode.UnprocessableEntity), deadLetters);
+        Assert.Equal(new DeliveryRemainder(1, 0), (await stream.DrainAsync()).Remainder);
+        Assert.Equal(UploadStreamState.DeadLetterWriteFailed, stream.Status.State);
+        await stream.DrainAsync();
+        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
+        Assert.Equal(1, stream.Status.DeadLetterCount);
+        Assert.Empty(source.ReadBatch());
+    }
+
+    [Fact]
+    public async Task FailedMigration_PausesWithoutSendingOrDiscardingFreshData()
+    {
+        var path = Path.Combine(_tempDirectory, "broken.json");
+        File.WriteAllText(path, "{\"schemaVersion\":999,\"items\":[]}");
+        using var cache = RealCache(path);
+        var source = new SegmentIngestService(new SystemClock(), cache);
+        source.Accept([Segment()]);
+        var handler = new CapturingHandler(HttpStatusCode.OK);
+        var stream = Stream(source, handler);
+        var result = await stream.DrainAsync();
+        Assert.Equal(UploadStreamState.CacheMigrationFailed, stream.Status.State);
+        Assert.Null(result.Remainder.Unconfirmed);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Restart_CompactsHistoricalSnapshots_AndCombinesFreshData()
+    {
+        var cache = new FakeCache();
+        var original = Segment(endSec: 20);
+        var later = Segment(original.Id, endSec: 80);
+        cache.Add([original, later]);
+        var source = new SegmentIngestService(new SystemClock(), cache);
+        source.Accept([Segment()]);
+        var handler = new CapturingHandler(HttpStatusCode.OK);
+        var result = await Stream(source, handler).DrainAsync();
+        Assert.Equal(2, result.DeliveredCount);
+        Assert.Equal(2, ParseBody(Assert.Single(handler.Requests).Body).Segments!.Count);
+        Assert.True(result.Remainder.IsEmpty);
+    }
+
+    [Fact]
+    public async Task HistoricalInputStyleCache_UsesSameConfirmationContract_WithoutReplayingSuccess()
+    {
+        var cache = new FakeCache();
+        cache.Add([Segment()]);
+        var source = new CachedUploadSource<ActivitySegmentItem>(cache);
+        var calls = 0;
+        var stream = new UploadStream<ActivitySegmentItem>("historical", [source], (_, _) =>
+        {
+            calls++;
+            return Task.FromResult(ApiResult.Ok);
+        });
+        Assert.True((await stream.DrainAsync()).Remainder.IsEmpty);
+        Assert.True((await stream.DrainAsync()).Remainder.IsEmpty);
+        Assert.Equal(1, calls);
+    }
+    [Fact]
+    public async Task EarlierSourceConfirmationFailure_IsNotClearedByLaterHealthySource()
+    {
+        var cache = new FakeCache();
+        cache.Add([Segment()]);
+        var first = new CachedUploadSource<ActivitySegmentItem>(cache);
+        var second = new SegmentIngestService(new SystemClock());
+        var stream = new UploadStream<ActivitySegmentItem>("segments", [first, second], (_, _) =>
+        {
+            cache.ThrowOnReplace = true;
+            return Task.FromResult(ApiResult.Ok);
+        });
+        var result = await stream.DrainAsync();
+        Assert.NotNull(result.Error);
+        Assert.Equal(UploadStreamState.CacheWriteFailed, stream.Status.State);
+        cache.ThrowOnReplace = false;
+        var recovered = new UploadStream<ActivitySegmentItem>("segments", [first, second], (_, _) => Task.FromResult(ApiResult.Ok));
+        Assert.True((await recovered.DrainAsync()).Remainder.IsEmpty);
     }
 
     [Fact]
@@ -474,10 +441,8 @@ public class UploadStreamTests : IDisposable
         var api = new HeartbeatApiClient(new HttpClient(handler));
         var stream = new UploadStream<ActivitySegmentItem>(
             "segments",
-            new FakeSource(),
-            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-            cache,
-            SnapshotCompaction.KeepLatest);
+            [new SegmentIngestService(new SystemClock(), cache)],
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct));
 
         await stream.DrainAsync();
 
@@ -500,299 +465,4 @@ public class UploadStreamTests : IDisposable
         Assert.Empty(cache.Load());
     }
 
-    [Fact]
-    public async Task NetworkFailure_RetainsBatch_AndRetriesAfterRestart()
-    {
-        var cachePath = Path.Combine(_tempDirectory, "network.json");
-        var source = new FakeSource();
-        source.Items.Add(Segment());
-        var networkFailure = new ControlledHandler((_, _, _) => throw new HttpRequestException("offline"));
-
-        await RealStream(source, cachePath, cachePath + ".dead-letter.json", networkFailure).DrainAsync();
-
-        Assert.Single(RealCache(cachePath).Load());
-        var recovered = new ControlledHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.OK));
-        await RealStream(new FakeSource(), cachePath, cachePath + ".dead-letter.json", recovered).DrainAsync();
-        Assert.Empty(RealCache(cachePath).Load());
-    }
-
-    [Theory]
-    [InlineData(HttpStatusCode.BadRequest)]
-    [InlineData(HttpStatusCode.UnprocessableEntity)]
-    public async Task PermanentRejection_SplitsBatch_UploadsValidItems_AndDeadLettersPoison(
-        HttpStatusCode rejection)
-    {
-        var cachePath = Path.Combine(_tempDirectory, $"split-{(int)rejection}.json");
-        var deadLetterPath = cachePath + ".dead-letter.json";
-        var validA = Segment();
-        var poison = Segment();
-        var validB = Segment();
-        var source = new FakeSource();
-        source.Items.AddRange([validA, poison, validB]);
-        var handler = new ControlledHandler((_, body, _) =>
-        {
-            var ids = ParseBody(body).Segments.Select(item => item.Id).ToList();
-            return ids.Contains(poison.Id)
-                ? new HttpResponseMessage(rejection)
-                {
-                    Content = new StringContent("invalid app identity")
-                }
-                : new HttpResponseMessage(HttpStatusCode.OK);
-        });
-
-        var stream = RealStream(source, cachePath, deadLetterPath, handler);
-        await stream.DrainAsync();
-
-        Assert.Empty(RealCache(cachePath).Load());
-        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
-        Assert.Equal(1, stream.Status.DeadLetterCount);
-        using var deadLetters = JsonDocument.Parse(File.ReadAllText(deadLetterPath));
-        var entry = Assert.Single(deadLetters.RootElement.GetProperty("entries").EnumerateArray());
-        Assert.Equal((int)rejection, entry.GetProperty("statusCode").GetInt32());
-        Assert.Contains("invalid app identity", entry.GetProperty("responseBody").GetString());
-        Assert.Equal(poison.Id, entry.GetProperty("item").GetProperty("id").GetGuid());
-
-        var sentSingletons = handler.RequestBodies
-            .Select(ParseBody)
-            .Where(request => request.Segments.Count == 1)
-            .Select(request => request.Segments[0].Id)
-            .ToList();
-        Assert.Contains(validA.Id, sentSingletons);
-        Assert.Contains(validB.Id, sentSingletons);
-
-        var restarted = RealStream(
-            new FakeSource(), cachePath, deadLetterPath,
-            new ControlledHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.OK)));
-        Assert.Equal(1, restarted.Status.DeadLetterCount);
-        Assert.Equal(deadLetterPath, restarted.Status.DeadLetterPath);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CancellationDuringSplit_RetainsOnlyUnconfirmedItems_AndFreshTail(bool durable)
-    {
-        using var cancellation = new CancellationTokenSource();
-        var delivered = Segment();
-        var pending = Segment();
-        var tail = Segment();
-        var cache = new FakeCache();
-        cache.Add([delivered, pending]);
-        var source = new FakeSource();
-        var durableSource = new FakeDurableSource();
-        source.Items.Add(tail);
-        durableSource.Items.Add(tail);
-        var attempts = 0;
-        var stream = new UploadStream<ActivitySegmentItem>("segments",
-            durable ? durableSource : source,
-            (batch, _) =>
-            {
-                attempts++;
-                if (batch.Count > 1) return Task.FromResult(new ApiResult(false, 422));
-                Assert.Equal(delivered.Id, Assert.Single(batch).Id);
-                cancellation.Cancel();
-                return Task.FromResult(ApiResult.Ok);
-            }, cache);
-
-        await stream.DrainAsync(cancellation.Token);
-
-        Assert.Equal(2, attempts);
-        Assert.DoesNotContain(cache.Items, item => item.Id == delivered.Id);
-        if (durable)
-        {
-            Assert.Equal(pending.Id, Assert.Single(cache.Items).Id);
-            Assert.Equal(tail.Id, Assert.Single(durableSource.Items).Id);
-        }
-        else
-        {
-            Assert.Equal(new[] { pending.Id, tail.Id }, cache.Items.Select(item => item.Id));
-            Assert.Empty(source.Items);
-        }
-    }
-
-    [Fact]
-    public async Task PayloadTooLarge_SplitsBatchUntilAccepted_WithoutDeadLetteringOrRetryingDeliveredItems()
-    {
-        var cachePath = Path.Combine(_tempDirectory, "payload-too-large.json");
-        var deadLetterPath = cachePath + ".dead-letter.json";
-        var source = new FakeSource();
-        source.Items.AddRange([Segment(), Segment(), Segment()]);
-        var handler = new ControlledHandler((_, body, _) =>
-            new HttpResponseMessage(
-                ParseBody(body).Segments.Count > 1
-                    ? HttpStatusCode.RequestEntityTooLarge
-                    : HttpStatusCode.OK));
-
-        var stream = RealStream(source, cachePath, deadLetterPath, handler);
-        await stream.DrainAsync();
-
-        Assert.Empty(RealCache(cachePath).Load());
-        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
-        Assert.Equal(0, stream.Status.DeadLetterCount);
-        Assert.Equal(5, handler.RequestBodies.Count);
-        Assert.Equal(
-            3,
-            handler.RequestBodies.Count(body => ParseBody(body).Segments.Count == 1));
-        Assert.False(File.Exists(deadLetterPath));
-    }
-
-    [Fact]
-    public async Task UpgradeRequired_PausesStream_RetainsQueue_AndCanRecoverAfterRestart()
-    {
-        var cachePath = Path.Combine(_tempDirectory, "upgrade.json");
-        var source = new FakeSource();
-        var queued = Segment();
-        source.Items.Add(queued);
-        var handler = new ControlledHandler((_, _, _) =>
-            new HttpResponseMessage(HttpStatusCode.UpgradeRequired)
-            {
-                Content = new StringContent("install 2.0")
-            });
-        var registry = new UploadStatusRegistry();
-        var stream = RealStream(
-            source, cachePath, cachePath + ".dead-letter.json", handler, registry);
-
-        await stream.DrainAsync();
-        source.Items.Add(Segment());
-        var paused = await stream.DrainAsync();
-
-        Assert.Equal(UploadStreamState.UpdateRequired, stream.Status.State);
-        Assert.Equal(UploadStreamState.UpdateRequired, registry.Snapshot["segments"].State);
-        Assert.Contains("install 2.0", stream.Status.Message);
-        Assert.Single(handler.RequestBodies);
-        Assert.Empty(source.Items);
-        Assert.Equal(2, paused.Remainder.RetainedLocally);
-        Assert.True(paused.Remainder.IsDurable);
-        Assert.Contains(RealCache(cachePath).Load(), item => item.Id == queued.Id);
-
-        var recovered = new ControlledHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.OK));
-        var restarted = RealStream(new FakeSource(), cachePath, cachePath + ".dead-letter.json", recovered);
-        await restarted.DrainAsync();
-        Assert.Empty(RealCache(cachePath).Load());
-        Assert.Equal(UploadStreamState.Ready, restarted.Status.State);
-    }
-
-    [Fact]
-    public async Task DeadLetterWriteFailure_KeepsRejectedRecordInDurableCache()
-    {
-        var cachePath = Path.Combine(_tempDirectory, "dead-letter-failure.json");
-        var source = new FakeSource();
-        var rejected = Segment();
-        source.Items.Add(rejected);
-        var handler = new ControlledHandler((_, _, _) =>
-            new HttpResponseMessage(HttpStatusCode.UnprocessableEntity));
-        var api = new HeartbeatApiClient(new HttpClient(handler));
-        var stream = new UploadStream<ActivitySegmentItem>(
-            "segments",
-            source,
-            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-            RealCache(cachePath),
-            SnapshotCompaction.KeepLatest,
-            new ThrowingDeadLetterStore<ActivitySegmentItem>());
-
-        await stream.DrainAsync();
-
-        Assert.Equal(UploadStreamState.DeadLetterWriteFailed, stream.Status.State);
-        Assert.Equal(rejected.Id, Assert.Single(RealCache(cachePath).Load()).Id);
-        Assert.Empty(source.Reinjected);
-    }
-
-    [Fact]
-    public async Task CacheWriteFailure_StatusReturnsToReadyAfterLaterSuccessfulSend()
-    {
-        var source = new FakeSource();
-        source.Items.Add(Segment());
-        var cache = new FakeCache { ThrowOnAdd = true };
-        var handler = new ControlledHandler((_, _, requestNumber) =>
-            new HttpResponseMessage(requestNumber == 1
-                ? HttpStatusCode.InternalServerError
-                : HttpStatusCode.OK));
-        var api = new HeartbeatApiClient(new HttpClient(handler));
-        var stream = new UploadStream<ActivitySegmentItem>(
-            "segments",
-            source,
-            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-            cache);
-
-        await stream.DrainAsync();
-        Assert.Equal(UploadStreamState.CacheWriteFailed, stream.Status.State);
-
-        cache.ThrowOnAdd = false;
-        source.Items.AddRange(source.Reinjected);
-        source.Reinjected.Clear();
-        await stream.DrainAsync();
-
-        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
-        Assert.Empty(source.Items);
-        Assert.Empty(source.Reinjected);
-    }
-
-    [Fact]
-    public async Task CacheReplaceFailure_StatusReturnsToReadyAfterLaterSuccessfulCommit()
-    {
-        var source = new FakeSource();
-        var cache = new FakeCache { ThrowOnReplace = true };
-        cache.Add([Segment()]);
-        var stream = new UploadStream<ActivitySegmentItem>(
-            "segments",
-            source,
-            (_, _) => Task.FromResult(ApiResult.Ok),
-            cache);
-
-        await stream.DrainAsync();
-        Assert.Equal(UploadStreamState.CacheWriteFailed, stream.Status.State);
-        Assert.Single(cache.Items);
-
-        cache.ThrowOnReplace = false;
-        await stream.DrainAsync();
-
-        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
-        Assert.Empty(cache.Items);
-    }
-
-    [Fact]
-    public async Task DeadLetterWriteFailure_StatusReturnsToReadyAfterLaterDeadLetterCommit()
-    {
-        var source = new FakeSource();
-        source.Items.Add(Segment());
-        var cache = new FakeCache();
-        var deadLetters = new FlakyDeadLetterStore<ActivitySegmentItem>();
-        var handler = new ControlledHandler((_, _, _) =>
-            new HttpResponseMessage(HttpStatusCode.UnprocessableEntity));
-        var api = new HeartbeatApiClient(new HttpClient(handler));
-        var stream = new UploadStream<ActivitySegmentItem>(
-            "segments",
-            source,
-            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-            cache,
-            deadLetterStore: deadLetters);
-
-        await stream.DrainAsync();
-        Assert.Equal(UploadStreamState.DeadLetterWriteFailed, stream.Status.State);
-        Assert.Single(cache.Items);
-
-        await stream.DrainAsync();
-
-        Assert.Equal(UploadStreamState.Ready, stream.Status.State);
-        Assert.Equal(1, stream.Status.DeadLetterCount);
-        Assert.Empty(cache.Items);
-    }
-
-    [Fact]
-    public async Task FailedCacheMigration_PausesStreamBeforeDrainingFreshItems()
-    {
-        var cachePath = Path.Combine(_tempDirectory, "broken-cache.json");
-        File.WriteAllText(cachePath, "{\"schemaVersion\":999,\"items\":[]}");
-        var source = new FakeSource();
-        source.Items.Add(Segment());
-        var handler = new ControlledHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.OK));
-
-        var stream = RealStream(source, cachePath, cachePath + ".dead-letter.json", handler);
-        await stream.DrainAsync();
-
-        Assert.Equal(UploadStreamState.CacheMigrationFailed, stream.Status.State);
-        Assert.Contains("restore", stream.Status.Action, StringComparison.OrdinalIgnoreCase);
-        Assert.Single(source.Items);
-        Assert.Empty(handler.RequestBodies);
-    }
 }

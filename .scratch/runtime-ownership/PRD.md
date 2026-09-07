@@ -21,6 +21,11 @@ Desktop 可从 Host snapshot 恢复操作展示，重启仅恢复 Installation/I
 及 Headless 保留终态证据，Desktop/Headless 共用上传调度停止顺序。全量 .NET 1,182/1,182 通过，双轴
 审查已闭合。01 的原生人工验收与 05 的最终动作仍未完成，PRD 保持 `ready-for-human`。
 
+2026-09-07：用户授权继续深化 04。上传源统一保留读取与显式确认，Segment 接管现有缓存；
+删除上传流的持久源类型分支、重注入和淘汰补偿。容量限制只约束传输批次，已提交投影与历史缓存
+并集完整保管。最终 .NET 1,173/1,173、Browser Host 5/5 通过，Standards/Spec 各 0 项未解决。
+本轮停在 04，01 人工门禁与 05 仍未完成，PRD 状态不变。
+
 ## Problem Statement
 
 Heartbeat 的退出重构已由 00806ad 落地，但正常运行时的能力变更、原生 session、管理操作与数据交付仍依赖跨模块时序。管理界面关闭可能影响已接受操作，旧 native session 可能与新 session 共享资源。

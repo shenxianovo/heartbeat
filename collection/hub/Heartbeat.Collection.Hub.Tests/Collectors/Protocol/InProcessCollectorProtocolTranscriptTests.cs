@@ -113,7 +113,7 @@ public class InProcessCollectorProtocolTranscriptTests
 
         Assert.False(ack.IsMessageRejected);
         Assert.Equal(FactDeliveryStatus.Committed, Assert.Single(ack.Results).Status);
-        var buffered = Assert.Single(sink.GetAndClearSegments());
+        var buffered = Assert.Single(sink.ReadBatch());
         Assert.NotEqual(Guid.Empty, buffered.Id);
         Assert.NotEqual(
             Guid.Parse("0198d5eb-fc31-7d7b-8bf0-c2d009ec8999"),
@@ -724,6 +724,53 @@ public class InProcessCollectorProtocolTranscriptTests
     }
 
     [Fact]
+    public async Task HistoricalCacheAndCommittedFact_KeepAllCustodyAcrossRestartAndBoundedUploads()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var statePath = Path.Combine(directory.Path, "runtime.json");
+        var cachePath = Path.Combine(directory.Path, "segments.json");
+        var clock = new FixedClock(new DateTimeOffset(2026, 8, 22, 10, 0, 0, TimeSpan.Zero));
+        using var cache = new Heartbeat.Collection.Hub.Storage.JsonFileCache<ActivitySegmentItem>(cachePath,
+            int.MaxValue, Heartbeat.Collection.Hub.Storage.HeartbeatCacheFormats.SegmentVersion2());
+        cache.Add(Enumerable.Range(0, 20_000).Select(_ => new ActivitySegmentItem
+        {
+            Id = Guid.CreateVersion7(), Source = "reference", IdentityKey = "historical",
+            StartTime = clock.UtcNow.AddDays(-1), EndTime = clock.UtcNow.AddDays(-1).AddMinutes(1)
+        }).ToList());
+        var source = new SegmentIngestService(clock, cache);
+        using var runtime = CollectorRuntime.Open(statePath, source);
+        var package = LocalCollectorPackage.Load(ReferencePackagePath);
+        using var config = JsonDocument.Parse("{}");
+        var instance = runtime.CreateInstance(package,
+            new SubjectReference(Guid.CreateVersion7(), SubjectKind.Machine),
+            new CollectorInstanceSpec(1, 1, config.RootElement.Clone()));
+        await using var activation = await runtime.ActivateInProcessAsync(instance.CollectorInstanceId,
+            package, new ReferenceInProcessCollector());
+        var stream = activation.Streams["activity"];
+        var acknowledgement = await stream.PublishAsync(Guid.CreateVersion7(), [CreateFact(stream.Descriptor.StreamId)]);
+        Assert.Equal(FactDeliveryStatus.Committed, Assert.Single(acknowledgement.Results).Status);
+        Assert.Equal(new DeliveryRemainder(20_001, 0), source.Remainder);
+        await activation.StopAsync();
+        runtime.Dispose();
+
+        // The live Fact has not yet been copied to the old cache; startup must merge both owners' history.
+        using var recoveredCache = new Heartbeat.Collection.Hub.Storage.JsonFileCache<ActivitySegmentItem>(cachePath,
+            int.MaxValue, Heartbeat.Collection.Hub.Storage.HeartbeatCacheFormats.SegmentVersion2());
+        var recovered = new SegmentIngestService(clock, recoveredCache);
+        using var reopened = CollectorRuntime.Open(statePath, recovered);
+        Assert.Equal(new DeliveryRemainder(20_001, 0), recovered.Remainder);
+        var upload = new UploadStream<ActivitySegmentItem>("segments", [recovered],
+            (_, _) => Task.FromResult(Heartbeat.Collection.Hub.Http.ApiResult.Ok));
+        var first = await upload.DrainAsync();
+        Assert.Equal(20_000, first.DeliveredCount);
+        Assert.Equal(new DeliveryRemainder(1, 0), first.Remainder);
+        var last = await upload.DrainAsync();
+        Assert.Equal(1, last.DeliveredCount);
+        Assert.Equal("reference|work", Assert.Single(last.Items).IdentityKey);
+        Assert.True(last.Remainder.IsEmpty);
+    }
+
+    [Fact]
     public async Task RuntimeReopen_ReplaysDurableFactAndKeepsDuplicateAndStreamIdentity()
     {
         await using var fixture = await ActivatedRuntimeFixture.CreateAsync();
@@ -782,7 +829,7 @@ public class InProcessCollectorProtocolTranscriptTests
         var replaySink = new SegmentIngestService(clock);
         using var reopened = CollectorRuntime.Open(statePath, replaySink);
 
-        Assert.Single(replaySink.GetAndClearSegments());
+        Assert.Single(replaySink.ReadBatch());
         Assert.Empty(replaySink.SourceLastSeen);
     }
 
@@ -810,19 +857,21 @@ public class InProcessCollectorProtocolTranscriptTests
         var current = CreateFact(stream.Descriptor.StreamId, revision: 3);
         var committedMessageId = Guid.CreateVersion7();
         await stream.PublishAsync(committedMessageId, [current]);
-        Assert.Single(sink.GetAndClearSegments());
+        var delivered = sink.ReadBatch();
+        Assert.Single(delivered);
+        sink.Confirm(delivered);
 
         clock.UtcNow = clock.UtcNow.AddMinutes(1);
         var replayed = await stream.PublishAsync(committedMessageId, [current]);
         Assert.Equal(FactDeliveryStatus.Committed, Assert.Single(replayed.Results).Status);
         Assert.Equal(clock.UtcNow, sink.SourceLastSeen["reference"]);
-        Assert.Empty(sink.GetAndClearSegments());
+        Assert.Empty(sink.ReadBatch());
 
         clock.UtcNow = clock.UtcNow.AddMinutes(1);
         var duplicate = await stream.PublishAsync(Guid.CreateVersion7(), [current]);
         Assert.Equal(FactDeliveryStatus.Duplicate, Assert.Single(duplicate.Results).Status);
         Assert.Equal(clock.UtcNow, sink.SourceLastSeen["reference"]);
-        Assert.Empty(sink.GetAndClearSegments());
+        Assert.Empty(sink.ReadBatch());
 
         clock.UtcNow = clock.UtcNow.AddMinutes(1);
         var superseded = await stream.PublishAsync(
@@ -844,7 +893,7 @@ public class InProcessCollectorProtocolTranscriptTests
     }
 
     [Fact]
-    public async Task Projection_ReinjectDoesNotOverwriteHigherRevisionThatShortensSegment()
+    public async Task Projection_ConfirmationDoesNotRemoveHigherRevisionThatShortensSegment()
     {
         using var directory = TemporaryDirectory.Create();
         var package = LocalCollectorPackage.Load(ReferencePackagePath);
@@ -874,7 +923,7 @@ public class InProcessCollectorProtocolTranscriptTests
                 title: "Stale long snapshot",
                 start: start,
                 end: start.AddMinutes(20))]);
-        var drained = sink.GetAndClearSegments();
+        var drained = sink.ReadBatch();
 
         await stream.PublishAsync(
             Guid.CreateVersion7(),
@@ -885,9 +934,9 @@ public class InProcessCollectorProtocolTranscriptTests
                 title: "Corrected short snapshot",
                 start: start,
                 end: start.AddMinutes(10))]);
-        ((IUploadSource<ActivitySegmentItem>)sink).Reinject(drained);
+        ((IUploadSource<ActivitySegmentItem>)sink).Confirm(drained);
 
-        var projected = Assert.Single(sink.GetAndClearSegments());
+        var projected = Assert.Single(sink.ReadBatch());
         Assert.Equal("Corrected short snapshot", projected.Title);
         Assert.Equal(start.AddMinutes(10), projected.EndTime);
     }
@@ -2803,11 +2852,10 @@ public class InProcessCollectorProtocolTranscriptTests
         await activation.Streams["first"].PublishAsync(Guid.CreateVersion7(), [first]);
         await activation.Streams["second"].PublishAsync(Guid.CreateVersion7(), [second]);
 
-        var projected = sink.GetAndClearSegments();
+        var projected = sink.ReadBatch();
         Assert.Equal(2, projected.Count);
         Assert.Equal(2, projected.Select(segment => segment.Id).Distinct().Count());
         Assert.All(projected, segment => Assert.Equal('7', segment.Id.ToString("D")[14]));
-        ((IUploadSource<ActivitySegmentItem>)sink).Reinject(projected);
 
         var retraction = first with
         {
@@ -2817,7 +2865,7 @@ public class InProcessCollectorProtocolTranscriptTests
         };
         await activation.Streams["first"].PublishAsync(Guid.CreateVersion7(), [retraction]);
 
-        Assert.Equal("Second stream", Assert.Single(sink.GetAndClearSegments()).Title);
+        Assert.Equal("Second stream", Assert.Single(sink.ReadBatch()).Title);
         await activation.DisposeAsync();
     }
 

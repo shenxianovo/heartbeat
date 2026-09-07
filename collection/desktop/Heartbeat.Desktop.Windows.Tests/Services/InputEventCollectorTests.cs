@@ -79,7 +79,7 @@ public sealed class InputEventCollectorTests
         hook.RaiseMouse(1);
         Assert.False(status.IsAvailable);
         Assert.True(recording.Enabled);
-        Assert.Empty(buffer.DrainAll());
+        Assert.Empty(buffer.ReadAll());
         Assert.False(hook.Running);
         recording.Set(false);
         await collector.Refresh();
@@ -132,7 +132,7 @@ public sealed class InputEventCollectorTests
         hook.RaiseKeyDown(new WindowsNativeKeyObservation(0x41, 0x1E, false));
 
         Assert.Equal(1, signal.Clicks);
-        Assert.Empty(buffer.DrainAll());
+        Assert.Empty(buffer.ReadAll());
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public sealed class InputEventCollectorTests
         await collector.Refresh();
         hook.RaiseKeyDown(keyA);
 
-        var events = buffer.DrainAll();
+        var events = buffer.ReadAll();
         Assert.Equal(2, events.Count);
         Assert.All(events, item => Assert.Equal(InputCodeSets.HeartbeatKeyPositionV1, item.CodeSet));
         Assert.All(events, item => Assert.Equal((short)InputKeyPosition.KeyA, item.Code));

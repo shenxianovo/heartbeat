@@ -30,16 +30,14 @@ public class UploadWorkerTests : IDisposable
     private sealed class FakeSource<T> : IUploadSource<T>
     {
         public List<T> Items { get; } = [];
-        public List<T> Reinjected { get; } = [];
 
-        public List<T> Drain()
+        public List<T> ReadBatch()
         {
             var copy = new List<T>(Items);
-            Items.Clear();
             return copy;
         }
 
-        public void Reinject(List<T> items) => Reinjected.AddRange(items);
+        public void Confirm(IReadOnlyList<T> items) => Items.RemoveAll(items.Contains);
     }
 
     private sealed class FakeCache<T> : ICache<T>
@@ -107,15 +105,12 @@ public class UploadWorkerTests : IDisposable
         var icons = new FakeIconUploader();
 
         var segStream = new UploadStream<ActivitySegmentItem>(
-            "段", segSource,
-            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-            new FakeCache<ActivitySegmentItem>(),
-            SnapshotCompaction.KeepLatest);
+            "段", [segSource],
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct));
         var inputCache = new FakeCache<InputEventItem>();
         var inputStream = new UploadStream<InputEventItem>(
-            "输入事件", inputSource,
-            (batch, ct) => api.UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }, ct),
-            inputCache);
+            "输入事件", [new CachedUploadSource<InputEventItem>(inputCache), inputSource],
+            (batch, ct) => api.UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }, ct));
 
         var hubConfig = new HubConfigurationAdapter(cm);
         var recording = new TestRecordingPolicy(recordingEnabled);

@@ -9,7 +9,7 @@ namespace Heartbeat.Collection.Hub.Runtime
 {
     /// <summary>
     /// 出网调度（ADR-020/022）：周期性驱动各上传流 drain 一轮。
-    /// 退回重注入由流自持（ADR-022），本类只负责节律与图标挂点。
+    /// 源保管待确认快照（ADR-022），本类只负责节律与图标挂点。
     /// </summary>
     public class UploadWorker(
         UploadStream<ActivitySegmentItem> segmentStream,
@@ -50,7 +50,7 @@ namespace Heartbeat.Collection.Hub.Runtime
             var segments = await segmentStream.DrainAsync(cancellationToken);
 
             if (!cancellationToken.IsCancellationRequested)
-                await hooks.SegmentsDrainedAsync(segments.FreshItems, cancellationToken);
+                await hooks.SegmentsDrainedAsync(segments.Items, cancellationToken);
         }
     }
 }

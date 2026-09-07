@@ -15,9 +15,9 @@ public sealed record DeliveryRemainder(int RetainedLocally, int? Unconfirmed)
         new(left.RetainedLocally + right.RetainedLocally, left.Unconfirmed + right.Unconfirmed);
 }
 
-/// <summary>DeliveredCount covers cached and fresh sends; the remainder includes untouched backlog.</summary>
+/// <summary>Items are snapshots read this round; the remainder also includes untouched backlog.</summary>
 public sealed record UploadDrainResult<T>(
-    IReadOnlyList<T> FreshItems,
+    IReadOnlyList<T> Items,
     int DeliveredCount,
     DeliveryRemainder Remainder,
     Exception? Error = null);

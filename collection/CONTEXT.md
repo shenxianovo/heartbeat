@@ -210,7 +210,7 @@ _Avoid_: App Hint、Host 侧产品映射、用显示名称或进程名代替稳�
 _Avoid_: 用 Stop 成功、上传状态或内存重注入推断数据安全
 
 **Upload Stream（上传流）**:
-泛化的出网流（ADR-020/022）：绑定一个出网源（IUploadSource），drain 一轮 = 先重传离线缓存，再取一个 adapter-defined 有界 fresh 批出网——送达，或落离线缓存，否则自动重注入源（重注入不回滚更新的快照）。413 会递归拆批，已成功子批不再重试；单项仍过大则保留重试。"批次不蒸发"是流自持的不变量。compact 为按流策略（segments 出网前压缩快照，input-events 不压缩）。segments 与 input-events 各一实例。
+泛化的出网流（ADR-020/022）：通过 IUploadSource 保留读取快照，发送后只确认 Analytics 接收或已隔离的项。源拥有缓存、容量及当前交付余量；读取与发送失败不转移保管责任，确认不得移除更高 Revision。400/422 定位坏记录，413 拆小批次，426 暂停出网。Segment 源合并历史与实时快照，InputEvent 持久投影与历史重试文件通过同一接口接入；segments 与 input-events 各一条流。
 _Avoid_: UploadService（退役的三份同构模板）、Upload Channel（ADR-022 前的旧名，彼时退回项由调用方重注入）
 
 **Segment Rotation Boundary（段轮换边界）**:

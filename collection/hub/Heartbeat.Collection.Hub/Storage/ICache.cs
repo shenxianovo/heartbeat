@@ -1,17 +1,17 @@
 namespace Heartbeat.Collection.Hub.Storage
 {
     /// <summary>
-    /// 离线缓存 seam（ADR-020）：上传通道的持久化侧。
-    /// 生产 adapter 是 <see cref="JsonFileCache{T}"/>；测试用 fake 驱动通道契约。
+    /// 离线缓存 seam（ADR-020）：数据 owner 的持久化侧。
+    /// 生产 adapter 是 <see cref="JsonFileCache{T}"/>；测试用 fake 驱动保管契约。
     /// </summary>
     public interface ICache<T>
     {
         CacheFileStatus Status { get; }
 
-        /// <summary>追加一批。写盘失败时抛出——调用方（上传通道）负责把批退回。</summary>
+        /// <summary>追加一批。写盘失败时原缓存不变，调用方仍保管未提交项。</summary>
         void Add(List<T> items);
         List<T> Load();
-        /// <summary>原子替换缓存内容。上传流用它提交部分成功后的剩余可重试项。</summary>
+        /// <summary>原子替换缓存内容。数据 owner 用它提交确认后的剩余项。</summary>
         void Replace(List<T> items);
         void Clear();
     }

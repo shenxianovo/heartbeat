@@ -23,12 +23,17 @@ var builder = WebApplication.CreateBuilder(Array.Empty<string>());
 builder.Logging.ClearProviders();
 builder.WebHost.UseUrls("http://127.0.0.1:0");
 await using var app = builder.Build();
-app.MapGet("/test/status", () => Results.Json(new
+app.MapGet("/test/status", () =>
 {
-    instances = runtime.ListInstances().Count,
-    status = runtime.ListInstances().Count == 0 ? null : runtime.DescribeExternalHostInstance(instance.CollectorInstanceId),
-    facts = sink.GetAndClearSegments()
-}));
+    var facts = sink.ReadBatch();
+    sink.Confirm(facts);
+    return Results.Json(new
+    {
+        instances = runtime.ListInstances().Count,
+        status = runtime.ListInstances().Count == 0 ? null : runtime.DescribeExternalHostInstance(instance.CollectorInstanceId),
+        facts
+    });
+});
 app.MapPost("/test/restart", async () =>
 {
     await handler.DisposeAsync();

@@ -403,10 +403,8 @@ public class StrictIngestProtocolTests(PostgresContainerFixture fixture) : Postg
             var api = new HeartbeatApiClient(client);
             var stream = new UploadStream<ActivitySegmentItem>(
                 "segments",
-                new EmptySegmentSource(),
+                [new Heartbeat.Collection.Hub.Segments.SegmentIngestService(new Heartbeat.Collection.Hub.Time.SystemClock(), cache)],
                 (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-                cache,
-                SnapshotCompaction.KeepLatest,
                 new JsonDeadLetterStore<ActivitySegmentItem>(deadLetterPath));
 
             await stream.DrainAsync();
@@ -683,12 +681,6 @@ public class StrictIngestProtocolTests(PostgresContainerFixture fixture) : Postg
                     .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("Test", _ => { });
             });
         });
-
-    private sealed class EmptySegmentSource : IUploadSource<ActivitySegmentItem>
-    {
-        public List<ActivitySegmentItem> Drain() => [];
-        public void Reinject(List<ActivitySegmentItem> items) { }
-    }
 
     private sealed class TestAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,

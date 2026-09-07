@@ -32,7 +32,7 @@ public class InputEventBufferTests
 
         Assert.True(buf.OnKeyDown(InputKeyPosition.KeyA));
 
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.Single(items);
         Assert.Equal(InputEventType.KeyDown, items[0].EventType);
         Assert.Equal((short)InputKeyPosition.KeyA, items[0].Code);
@@ -40,18 +40,18 @@ public class InputEventBufferTests
     }
 
     [Fact]
-    public void Requeue_PreservesIds_ForIdempotentReupload()
+    public void Read_PreservesIds_UntilExplicitConfirmation()
     {
-        // 上传通道退回契约（ADR-020）：保 Id 回队，服务端按 Id 幂等去重
         var buf = NewBuffer();
         buf.OnKeyDown(InputKeyPosition.KeyA);
         buf.OnMouseButton(1);
-        var drained = buf.DrainAll();
+        var drained = buf.ReadAll();
 
-        buf.Requeue(drained);
 
-        var requeued = buf.DrainAll();
+        var requeued = buf.ReadAll();
         Assert.Equal(drained.Select(i => i.Id), requeued.Select(i => i.Id));
+        buf.Confirm(drained);
+        Assert.Empty(buf.ReadAll());
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class InputEventBufferTests
         buf.OnKeyUp(InputKeyPosition.KeyA);
         Assert.True(buf.OnKeyDown(InputKeyPosition.KeyA));   // 抬起后再按，重新记录
 
-        Assert.Equal(2, buf.DrainAll().Count);
+        Assert.Equal(2, buf.ReadAll().Count);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class InputEventBufferTests
         Assert.True(buf.OnKeyDown(InputKeyPosition.KeyB));
         Assert.True(buf.OnKeyDown(InputKeyPosition.KeyC));
 
-        Assert.Equal(3, buf.DrainAll().Count);
+        Assert.Equal(3, buf.ReadAll().Count);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class InputEventBufferTests
         buf.OnMouseButton(2);
         buf.OnMouseButton(3);
 
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.Equal(3, items.Count);
         Assert.All(items, i => Assert.Equal(InputEventType.MouseButton, i.EventType));
     }
@@ -102,7 +102,7 @@ public class InputEventBufferTests
 
         buf.OnScroll(InputEventBuffer.WheelDelta);  // 上滚一档
 
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.Single(items);
         Assert.Equal(InputEventType.MouseScroll, items[0].EventType);
         Assert.Equal((short)1, items[0].Code);  // 上
@@ -115,7 +115,7 @@ public class InputEventBufferTests
 
         buf.OnScroll(-InputEventBuffer.WheelDelta);
 
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.Single(items);
         Assert.Equal((short)2, items[0].Code);  // 下
     }
@@ -127,12 +127,12 @@ public class InputEventBufferTests
 
         // 三次 40 凑成一档（120），第三次才记录
         buf.OnScroll(40);
-        Assert.Empty(buf.DrainAll());
+        Assert.Empty(buf.ReadAll());
         buf.OnScroll(40);
-        Assert.Empty(buf.DrainAll());
+        Assert.Empty(buf.ReadAll());
         buf.OnScroll(40);
 
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.Single(items);
         Assert.Equal((short)1, items[0].Code);
     }
@@ -144,7 +144,7 @@ public class InputEventBufferTests
 
         buf.OnScroll(InputEventBuffer.WheelDelta * 3);  // 一次滚三档
 
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.Equal(3, items.Count);
         Assert.All(items, i => Assert.Equal((short)1, i.Code));
     }
@@ -155,10 +155,11 @@ public class InputEventBufferTests
         var buf = NewBuffer();
 
         buf.OnScroll(200);  // 一档(120) + 余 80
-        Assert.Single(buf.DrainAll());
+        var first = Assert.Single(buf.ReadAll());
+        buf.Confirm([first]);
 
         buf.OnScroll(40);   // 80 + 40 = 120 → 再一档
-        Assert.Single(buf.DrainAll());
+        Assert.Single(buf.ReadAll());
     }
 
     [Fact]
@@ -173,17 +174,19 @@ public class InputEventBufferTests
 
         Assert.Equal(3, error.Capacity);
         Assert.Equal(3, buf.Count);
-        Assert.Equal([1, 2, 3], buf.DrainAll().Select(item => item.Code));
+        Assert.Equal([1, 2, 3], buf.ReadAll().Select(item => item.Code));
     }
 
     [Fact]
-    public void DrainAll_EmptiesBuffer()
+    public void Confirmation_EmptiesBuffer()
     {
         var buf = NewBuffer();
 
         buf.OnKeyDown(InputKeyPosition.KeyA);
-        Assert.Single(buf.DrainAll());
-        Assert.Empty(buf.DrainAll());
+        var batch = buf.ReadAll();
+        Assert.Single(batch);
+        buf.Confirm(batch);
+        Assert.Empty(buf.ReadAll());
         Assert.Equal(0, buf.Count);
     }
 
@@ -198,7 +201,7 @@ public class InputEventBufferTests
 
         Assert.True(buf.OnKeyDown(InputKeyPosition.KeyA));
         buf.OnScroll(40);
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.Equal(2, items.Count(i => i.EventType == InputEventType.KeyDown));
         Assert.DoesNotContain(items, i => i.EventType == InputEventType.MouseScroll);
     }
@@ -211,7 +214,7 @@ public class InputEventBufferTests
         buf.OnMouseButton(1);
         buf.OnMouseButton(1);
 
-        var items = buf.DrainAll();
+        var items = buf.ReadAll();
         Assert.NotEqual(items[0].Id, items[1].Id);
         Assert.NotEqual(Guid.Empty, items[0].Id);
     }
@@ -236,12 +239,12 @@ public class InputEventBufferTests
             ((IInputEventFactSink)first).Accept(item, isReplay: true);
 
             var restarted = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
-            var drained = ((IUploadSource<InputEventItem>)restarted).Drain();
+            var drained = ((IUploadSource<InputEventItem>)restarted).ReadBatch();
 
             Assert.Equal(item.Id, Assert.Single(drained).Id);
-            ((IDurableUploadSource<InputEventItem>)restarted).CompleteDrain(drained, []);
+            ((IUploadSource<InputEventItem>)restarted).Confirm(drained);
             var completed = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
-            Assert.Empty(((IUploadSource<InputEventItem>)completed).Drain());
+            Assert.Empty(((IUploadSource<InputEventItem>)completed).ReadBatch());
         }
         finally
         {
@@ -267,14 +270,14 @@ public class InputEventBufferTests
         {
             var first = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
             ((IInputEventFactSink)first).Accept(item, isReplay: false);
-            var source = (IDurableUploadSource<InputEventItem>)first;
-            var delivered = source.Drain();
-            source.CompleteDrain(delivered, []);
+            var source = (IUploadSource<InputEventItem>)first;
+            var delivered = source.ReadBatch();
+            source.Confirm(delivered);
 
             var restarted = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
             ((IInputEventFactReplaySink)restarted).Replay([item]);
 
-            Assert.Empty(((IUploadSource<InputEventItem>)restarted).Drain());
+            Assert.Empty(((IUploadSource<InputEventItem>)restarted).ReadBatch());
         }
         finally
         {
@@ -308,7 +311,7 @@ public class InputEventBufferTests
                 stopwatch.Elapsed < TimeSpan.FromSeconds(5),
                 $"20,000 durable InputEvent Facts took {stopwatch.Elapsed} to replay.");
             var restarted = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
-            var retained = restarted.DrainAll();
+            var retained = restarted.ReadAll();
             Assert.Equal(items.Select(item => item.Id), retained.Select(item => item.Id));
             Assert.Equal(items.Length, retained.Select(item => item.Id).Distinct().Count());
         }
@@ -336,9 +339,9 @@ public class InputEventBufferTests
         {
             var buffer = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
             ((IInputEventFactReplaySink)buffer).Replay(items);
-            var source = (IDurableUploadSource<InputEventItem>)buffer;
+            var source = (IUploadSource<InputEventItem>)buffer;
 
-            var first = source.Drain();
+            var first = source.ReadBatch();
 
             Assert.Equal(5_000, first.Count);
             Assert.Equal(items.Take(5_000).Select(item => item.Id), first.Select(item => item.Id));
@@ -346,9 +349,9 @@ public class InputEventBufferTests
                 JsonSerializer.SerializeToUtf8Bytes(
                     new InputEventUploadRequest { Events = first }).Length < 1_048_576,
                 "The bounded InputEvent upload batch must stay below the default reverse-proxy body limit.");
-            source.CompleteDrain(first, []);
+            source.Confirm(first);
             Assert.Equal(new DeliveryRemainder(3, 0), source.Remainder);
-            Assert.Equal(items.Skip(5_000).Select(item => item.Id), source.Drain().Select(item => item.Id));
+            Assert.Equal(items.Skip(5_000).Select(item => item.Id), source.ReadBatch().Select(item => item.Id));
         }
         finally
         {
@@ -381,7 +384,7 @@ public class InputEventBufferTests
 
             Assert.False(accepted);
             var restarted = new InputEventBuffer(new FakeClock(), durableProjectionPath: path);
-            Assert.Empty(restarted.DrainAll());
+            Assert.Empty(restarted.ReadAll());
         }
         finally
         {
@@ -413,16 +416,16 @@ public class InputEventBufferTests
                 ((IInputEventFactSink)first).Accept(items[2], isReplay: false));
 
             var restarted = new InputEventBuffer(new FakeClock(), capacity: 2, durableProjectionPath: path);
-            var retained = ((IUploadSource<InputEventItem>)restarted).Drain();
+            var retained = ((IUploadSource<InputEventItem>)restarted).ReadBatch();
             Assert.Equal(items.Take(2).Select(item => item.Id), retained.Select(item => item.Id));
 
-            ((IDurableUploadSource<InputEventItem>)restarted).CompleteDrain(retained, [retained[1]]);
+            ((IUploadSource<InputEventItem>)restarted).Confirm([retained[0]]);
             ((IInputEventFactSink)restarted).Accept(items[2], isReplay: false);
             var completedRestart = new InputEventBuffer(
                 new FakeClock(), capacity: 2, durableProjectionPath: path);
             Assert.Equal(
                 [items[1].Id, items[2].Id],
-                ((IUploadSource<InputEventItem>)completedRestart).Drain().Select(item => item.Id));
+                ((IUploadSource<InputEventItem>)completedRestart).ReadBatch().Select(item => item.Id));
         }
         finally
         {
@@ -445,7 +448,7 @@ public class InputEventBufferTests
             var reopened = new InputEventBuffer(new FakeClock(), capacity: 3, durableProjectionPath: path);
             Assert.Equal(4, reopened.Count);
             Assert.Throws<InputEventCapacityExceededException>(() => reopened.OnMouseButton(5));
-            Assert.Equal([1, 2, 3, 4], reopened.DrainAll().Select(item => item.Code));
+            Assert.Equal([1, 2, 3, 4], reopened.ReadAll().Select(item => item.Code));
         }
         finally
         {
@@ -473,7 +476,7 @@ public class InputEventBufferTests
             UploadStreamState.Backpressure,
             registry.Snapshot[InputEventBuffer.StatusStreamName].State);
 
-        buffer.DrainAll();
+        buffer.Confirm(buffer.ReadAll());
         Assert.Equal(
             UploadStreamState.Ready,
             registry.Snapshot[InputEventBuffer.StatusStreamName].State);
@@ -505,15 +508,13 @@ public class InputEventBufferTests
             }).ToArray();
             foreach (var item in initial)
                 ((IInputEventFactSink)buffer).Accept(item, isReplay: false);
-            var drained = ((IUploadSource<InputEventItem>)buffer).Drain();
+            var drained = ((IUploadSource<InputEventItem>)buffer).ReadBatch();
             using var start = new ManualResetEventSlim();
 
             var complete = Task.Run(() =>
             {
                 start.Wait();
-                ((IDurableUploadSource<InputEventItem>)buffer).CompleteDrain(
-                    drained,
-                    drained.Skip(5).ToArray());
+                ((IUploadSource<InputEventItem>)buffer).Confirm(drained.Take(5).ToArray());
             });
             var enqueue = Task.Run(async () =>
             {
@@ -538,7 +539,7 @@ public class InputEventBufferTests
             await Task.WhenAll(complete, enqueue);
 
             var restarted = new InputEventBuffer(new FakeClock(), capacity: 10, durableProjectionPath: path);
-            var retained = restarted.DrainAll();
+            var retained = restarted.ReadAll();
             Assert.Equal(10, retained.Count);
             Assert.Equal(10, retained.Select(item => item.Id).Distinct().Count());
             Assert.Equal(

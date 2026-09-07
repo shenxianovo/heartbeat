@@ -26,7 +26,7 @@ namespace Heartbeat.Collector.System.Input
     /// - 为每个事件生成 UUIDv7
     /// </summary>
     public sealed class InputEventBuffer :
-        IDurableUploadSource<InputEventItem>,
+        IUploadSource<InputEventItem>,
         IInputEventFactSink,
         IInputEventFactReplaySink
     {
@@ -170,92 +170,39 @@ namespace Heartbeat.Collector.System.Input
             }
         }
 
-        /// <summary>
-        /// 读取当前所有事件；内存测试模式会立即清空，生产持久模式等待 UploadStream 提交 drain 结果。
-        /// </summary>
-        public List<InputEventItem> DrainAll()
+        /// <summary>Read retained events without releasing custody.</summary>
+        public List<InputEventItem> ReadAll()
         {
-            if (_durableProjectionCache is not null)
-            {
-                lock (_durableGate)
-                    return _durableProjectionCache.Load();
-            }
+            lock (_durableGate)
+                return _durableProjectionCache?.Load() ?? _queue.ToList();
+        }
+
+        public List<InputEventItem> ReadBatch()
+        {
+            lock (_durableGate)
+                return (_durableProjectionCache?.Load() ?? _queue.ToList()).Take(UploadBatchSize).ToList();
+        }
+
+        public void Confirm(IReadOnlyList<InputEventItem> items)
+        {
+            var confirmed = items.Select(item => item.Id).ToHashSet();
             lock (_durableGate)
             {
-                var result = new List<InputEventItem>();
-                while (_queue.TryDequeue(out var item))
+                var retained = (_durableProjectionCache?.Load() ?? _queue.ToList())
+                    .Where(item => !confirmed.Contains(item.Id)).ToList();
+                if (_durableProjectionCache is not null)
+                    _durableProjectionCache.Replace(retained);
+                else
                 {
-                    _count--;
-                    result.Add(item);
+                    _queue.Clear();
+                    foreach (var item in retained) _queue.Enqueue(item);
                 }
-                UpdateStatus(_count);
-                return result;
-            }
-        }
-
-        private List<InputEventItem> DrainUploadBatch()
-        {
-            if (_durableProjectionCache is not null)
-            {
-                lock (_durableGate)
-                    return _durableProjectionCache.Load().Take(UploadBatchSize).ToList();
-            }
-
-            lock (_durableGate)
-            {
-                var result = new List<InputEventItem>(Math.Min(Count, UploadBatchSize));
-                while (result.Count < UploadBatchSize && _queue.TryDequeue(out var item))
-                {
-                    _count--;
-                    result.Add(item);
-                }
-                UpdateStatus(_count);
-                return result;
-            }
-        }
-
-        /// <summary>
-        /// 退回重注入（ADR-020 上传通道契约）：既没送达也没缓存住的批原样回队，
-        /// 保留原 Id——服务端按 Id 幂等去重，重复注入不产生重复行。
-        /// </summary>
-        public void Requeue(List<InputEventItem> items)
-        {
-            foreach (var item in items)
-                EnqueueItem(item);
-        }
-
-        /// <summary>IUploadSource adapter：出网侧的统一 drain 词汇。</summary>
-        List<InputEventItem> IUploadSource<InputEventItem>.Drain() => DrainUploadBatch();
-
-        /// <summary>IUploadSource adapter：退回批保 Id 回队。</summary>
-        void IUploadSource<InputEventItem>.Reinject(List<InputEventItem> items) => Requeue(items);
-
-        void IDurableUploadSource<InputEventItem>.CompleteDrain(
-            IReadOnlyList<InputEventItem> drained,
-            IReadOnlyList<InputEventItem> retryItems)
-        {
-            if (_durableProjectionCache is null)
-            {
-                Requeue(retryItems.ToList());
-                return;
-            }
-
-            var drainedIds = drained.Select(item => item.Id).ToHashSet();
-            var retryIds = retryItems.Select(item => item.Id).ToHashSet();
-            lock (_durableGate)
-            {
-                var retained = _durableProjectionCache.Load()
-                    .Where(item => !drainedIds.Contains(item.Id) || retryIds.Contains(item.Id))
-                    .ToList();
-                _durableProjectionCache.Replace(retained);
                 Volatile.Write(ref _count, retained.Count);
                 UpdateStatus(retained.Count);
 
                 if (_deliveryReceiptCache is not null)
                 {
-                    var delivered = drainedIds
-                        .Where(id => !retryIds.Contains(id) && !_deliveredIds.Contains(id))
-                        .ToList();
+                    var delivered = confirmed.Where(id => !_deliveredIds.Contains(id)).ToList();
                     if (delivered.Count > 0)
                     {
                         var receipts = _deliveryReceiptCache.Load();

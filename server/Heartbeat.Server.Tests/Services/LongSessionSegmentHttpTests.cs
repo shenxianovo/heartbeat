@@ -81,10 +81,8 @@ public sealed class LongSessionSegmentHttpTests(PostgresContainerFixture fixture
             var api = new HeartbeatApiClient(http);
             var upload = new UploadStream<ActivitySegmentItem>(
                 "long system session",
-                sink,
+                [sink],
                 (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
-                new MemoryCache<ActivitySegmentItem>(),
-                SnapshotCompaction.KeepLatest,
                 new JsonDeadLetterStore<ActivitySegmentItem>(
                     Path.Combine(root, "segments-dead-letter.json")));
 
@@ -126,11 +124,10 @@ public sealed class LongSessionSegmentHttpTests(PostgresContainerFixture fixture
         List<ActivitySegmentItem> projected = [];
         while (projected.Count == 0)
         {
-            projected = sink.GetAndClearSegments();
+            projected = sink.ReadBatch();
             if (projected.Count == 0)
                 await Task.Delay(10, timeout.Token);
         }
-        ((IUploadSource<ActivitySegmentItem>)sink).Reinject(projected);
         await upload.DrainAsync();
     }
 
@@ -196,16 +193,6 @@ public sealed class LongSessionSegmentHttpTests(PostgresContainerFixture fixture
             InputEventItem item,
             bool isReplay,
             ICollectorProjectionCommitFence commitFence) => !commitFence.IsFenced;
-    }
-
-    private sealed class MemoryCache<T> : ICache<T>
-    {
-        private List<T> _items = [];
-        public CacheFileStatus Status => CacheFileStatus.Ready;
-        public void Add(List<T> items) => _items.AddRange(items);
-        public List<T> Load() => [.. _items];
-        public void Replace(List<T> items) => _items = [.. items];
-        public void Clear() => _items.Clear();
     }
 
     private sealed class TestAuthenticationHandler(

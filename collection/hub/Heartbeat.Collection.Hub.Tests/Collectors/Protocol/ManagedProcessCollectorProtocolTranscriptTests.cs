@@ -80,18 +80,15 @@ public class ManagedProcessCollectorProtocolTranscriptTests
         var segment = await WaitForSegmentAsync(sink);
         Assert.Equal("reference.account", segment.Source);
         Assert.Equal("reference.account|online", segment.IdentityKey);
-        ((IUploadSource<ActivitySegmentItem>)sink).Reinject([segment]);
         List<ActivitySegmentItem>? uploaded = null;
         var upload = new UploadStream<ActivitySegmentItem>(
             "reference account segment",
-            sink,
+            [sink],
             (batch, _) =>
             {
                 uploaded = batch;
                 return Task.FromResult(ApiResult.Ok);
-            },
-            new MemoryCache<ActivitySegmentItem>(),
-            SnapshotCompaction.KeepLatest);
+            });
         await upload.DrainAsync();
         Assert.Equal("reference.account|online", Assert.Single(uploaded!).IdentityKey);
 
@@ -986,7 +983,7 @@ public class ManagedProcessCollectorProtocolTranscriptTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (true)
         {
-            var segments = sink.GetAndClearSegments();
+            var segments = sink.ReadBatch();
             if (segments.Count != 0)
                 return Assert.Single(segments);
             await Task.Delay(20, timeout.Token);
@@ -1227,16 +1224,6 @@ public class ManagedProcessCollectorProtocolTranscriptTests
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow => utcNow;
-    }
-
-    private sealed class MemoryCache<T> : ICache<T>
-    {
-        private List<T> _items = [];
-        public CacheFileStatus Status => CacheFileStatus.Ready;
-        public void Add(List<T> items) => _items.AddRange(items);
-        public List<T> Load() => [.. _items];
-        public void Replace(List<T> items) => _items = [.. items];
-        public void Clear() => _items.Clear();
     }
 
     private sealed class TemporaryDirectory : IDisposable

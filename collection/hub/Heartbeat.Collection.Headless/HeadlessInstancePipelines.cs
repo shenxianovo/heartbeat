@@ -58,22 +58,20 @@ internal sealed class HeadlessInstancePipelines(
         var directory = Path.Combine(dataDirectory, "instances", collectorInstanceId.ToString("D"));
         Directory.CreateDirectory(directory);
         var registration = new PipelineRegistration(subject, displayName);
-        var ingest = new SegmentIngestService(new SystemClock());
         var cache = new JsonFileCache<ActivitySegmentItem>(
             Path.Combine(directory, "segments-cache.json"),
-            20_000,
+            int.MaxValue,
             HeartbeatCacheFormats.SegmentVersion2(),
             HeartbeatCacheFormats.SegmentMigrations());
+        var ingest = new SegmentIngestService(new SystemClock(), cache);
         var upload = new UploadStream<ActivitySegmentItem>(
             $"段/{collectorInstanceId:D}",
-            ingest,
+            [ingest],
             (batch, ct) => segmentUpload.SendAsync(
                 collectorInstanceId,
                 registration.Subject,
                 registration.DisplayName,
                 batch, ct),
-            cache,
-            SnapshotCompaction.KeepLatest,
             new JsonDeadLetterStore<ActivitySegmentItem>(
                 Path.Combine(directory, "segments-dead-letter.json")),
             new UploadStatusRegistry(),

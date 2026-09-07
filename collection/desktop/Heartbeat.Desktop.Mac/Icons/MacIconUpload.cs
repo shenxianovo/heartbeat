@@ -14,7 +14,7 @@ public sealed class MacIconUploadService(
 {
     private readonly HashSet<string> _uploaded = new(StringComparer.OrdinalIgnoreCase);
 
-    public async Task EnsureUploadedAsync(string appIdentityKey, string? appDisplayName)
+    public async Task EnsureUploadedAsync(string appIdentityKey, string? appDisplayName, CancellationToken cancellationToken = default)
     {
         if (compatibility.Current.UpdateRequired) return;
         var normalized = AppIdentityKeys.Normalize(appIdentityKey);
@@ -27,7 +27,7 @@ public sealed class MacIconUploadService(
             AppIdentityKey = normalized,
             AppDisplayName = appDisplayName,
             IconData = icon,
-        });
+        }, cancellationToken);
         if (result.StatusCode == 426)
         {
             compatibility.RequireUpdate(result.ResponseBody);
@@ -42,14 +42,15 @@ public sealed class MacHubRuntimeHooks(MacIconUploadService icons) : IHubRuntime
 {
     public void OnStarting() { }
 
-    public async Task SegmentsDrainedAsync(IReadOnlyCollection<ActivitySegmentItem> segments)
+    public async Task SegmentsDrainedAsync(IReadOnlyCollection<ActivitySegmentItem> segments, CancellationToken cancellationToken = default)
     {
         foreach (var app in segments
                      .Where(segment => !string.IsNullOrWhiteSpace(segment.AppIdentityKey))
                      .Select(segment => (Identity: segment.AppIdentityKey!, segment.AppDisplayName))
                      .DistinctBy(item => item.Identity, StringComparer.OrdinalIgnoreCase))
         {
-            try { await icons.EnsureUploadedAsync(app.Identity, app.AppDisplayName); }
+            if (cancellationToken.IsCancellationRequested) break;
+            try { await icons.EnsureUploadedAsync(app.Identity, app.AppDisplayName, cancellationToken); }
             catch (Exception exception) { Log.Warning(exception, "macOS AppIcon 上传失败: {Identity}", app.Identity); }
         }
     }

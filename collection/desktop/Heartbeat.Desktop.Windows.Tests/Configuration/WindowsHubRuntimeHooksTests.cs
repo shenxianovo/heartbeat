@@ -28,7 +28,7 @@ public sealed class WindowsHubRuntimeHooksTests : IDisposable
 
     private sealed class NoopIconUploadService : IIconUploadService
     {
-        public Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName) =>
+        public Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
     }
 }

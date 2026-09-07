@@ -102,7 +102,7 @@ public sealed class HeadlessFleetManagerTests : IDisposable
             Guid collectorInstanceId,
             SubjectReference subject,
             string displayName,
-            List<ActivitySegmentItem> batch) => Task.FromResult(ApiResult.Ok);
+            List<ActivitySegmentItem> batch, CancellationToken cancellationToken = default) => Task.FromResult(ApiResult.Ok);
 
         public void Remove(Guid collectorInstanceId) => Removed.Add(collectorInstanceId);
         public void Dispose() { }

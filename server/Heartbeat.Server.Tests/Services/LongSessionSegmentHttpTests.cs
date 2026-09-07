@@ -82,7 +82,7 @@ public sealed class LongSessionSegmentHttpTests(PostgresContainerFixture fixture
             var upload = new UploadStream<ActivitySegmentItem>(
                 "long system session",
                 sink,
-                batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+                (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
                 new MemoryCache<ActivitySegmentItem>(),
                 SnapshotCompaction.KeepLatest,
                 new JsonDeadLetterStore<ActivitySegmentItem>(

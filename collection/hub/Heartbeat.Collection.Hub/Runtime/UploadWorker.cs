@@ -34,7 +34,7 @@ namespace Heartbeat.Collection.Hub.Runtime
                     Log.Debug("上传间隔: {Interval}", interval);
 
                     await Task.Delay(interval, stoppingToken);
-                    await DrainOnceAsync();
+                    await DrainOnceAsync(stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -51,17 +51,19 @@ namespace Heartbeat.Collection.Hub.Runtime
         {
             Log.Information("上传调度服务正在停止，上传剩余数据...");
 
+            // Cancel and join the periodic drain before touching its sources/cache again.
+            // The stream persists unfinished batches on cancellation before returning.
+            await base.StopAsync(CancellationToken.None);
+
             // AppMonitorService 已先停止（注册逆序，ADR-020），其终态快照已在 hub 缓冲中。
             try
             {
-                await DrainOnceAsync();
+                await DrainOnceAsync(cancellationToken);
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "停止时上传剩余数据失败");
             }
-
-            await base.StopAsync(cancellationToken);
         }
 
         /// <summary>
@@ -69,11 +71,12 @@ namespace Heartbeat.Collection.Hub.Runtime
         /// （ADR-030 §3，未确认的才发，失败不阻塞下一轮）。
         /// 周期循环与 StopAsync 终态 drain 共用此入口；测试直接调用模拟一轮调度。
         /// </summary>
-        public async Task DrainOnceAsync()
+        public async Task DrainOnceAsync(CancellationToken cancellationToken = default)
         {
             try
             {
-                await declarationUplink.PushOnceAsync();
+                if (!cancellationToken.IsCancellationRequested)
+                    await declarationUplink.PushOnceAsync(cancellationToken);
             }
             catch (Exception ex)
             {
@@ -81,10 +84,11 @@ namespace Heartbeat.Collection.Hub.Runtime
             }
 
             if (inputRecording.Enabled)
-                await inputStream.DrainAsync();
-            var segments = await segmentStream.DrainAsync();
+                await inputStream.DrainAsync(cancellationToken);
+            var segments = await segmentStream.DrainAsync(cancellationToken);
 
-            await hooks.SegmentsDrainedAsync(segments);
+            if (!cancellationToken.IsCancellationRequested)
+                await hooks.SegmentsDrainedAsync(segments, cancellationToken);
         }
     }
 }

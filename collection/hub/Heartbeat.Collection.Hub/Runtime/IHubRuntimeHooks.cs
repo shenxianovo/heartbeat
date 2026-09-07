@@ -9,12 +9,12 @@ namespace Heartbeat.Collection.Hub.Runtime;
 public interface IHubRuntimeHooks
 {
     void OnStarting();
-    Task SegmentsDrainedAsync(IReadOnlyCollection<ActivitySegmentItem> segments);
+    Task SegmentsDrainedAsync(IReadOnlyCollection<ActivitySegmentItem> segments, CancellationToken cancellationToken = default);
 }
 
 public sealed class NullHubRuntimeHooks : IHubRuntimeHooks
 {
     public void OnStarting() { }
-    public Task SegmentsDrainedAsync(IReadOnlyCollection<ActivitySegmentItem> segments)
+    public Task SegmentsDrainedAsync(IReadOnlyCollection<ActivitySegmentItem> segments, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 }

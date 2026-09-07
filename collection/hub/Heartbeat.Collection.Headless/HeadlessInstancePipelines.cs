@@ -18,7 +18,7 @@ internal interface IHeadlessSegmentUpload : IDisposable
         Guid collectorInstanceId,
         SubjectReference subject,
         string displayName,
-        List<ActivitySegmentItem> batch);
+        List<ActivitySegmentItem> batch, CancellationToken cancellationToken = default);
 
     void Remove(Guid collectorInstanceId);
 }
@@ -60,11 +60,11 @@ internal sealed class HeadlessInstancePipelines(
         var upload = new UploadStream<ActivitySegmentItem>(
             $"段/{collectorInstanceId:D}",
             ingest,
-            batch => segmentUpload.SendAsync(
+            (batch, ct) => segmentUpload.SendAsync(
                 collectorInstanceId,
                 registration.Subject,
                 registration.DisplayName,
-                batch),
+                batch, ct),
             cache,
             SnapshotCompaction.KeepLatest,
             new JsonDeadLetterStore<ActivitySegmentItem>(
@@ -267,7 +267,7 @@ internal sealed class HeadlessAnalyticsSegmentUploadAdapter(TokenManager tokens)
         Guid collectorInstanceId,
         SubjectReference subject,
         string displayName,
-        List<ActivitySegmentItem> batch)
+        List<ActivitySegmentItem> batch, CancellationToken cancellationToken = default)
     {
         HttpClient http;
         lock (_gate)
@@ -286,7 +286,7 @@ internal sealed class HeadlessAnalyticsSegmentUploadAdapter(TokenManager tokens)
             }
         }
         return new HeartbeatApiClient(http)
-            .UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch });
+            .UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, cancellationToken);
     }
 
     public void Remove(Guid collectorInstanceId)

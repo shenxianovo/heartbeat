@@ -63,8 +63,8 @@ namespace Heartbeat.Collection.Hub.Segments
 
         /// <summary>
         /// Durable Collector Facts have already passed their declared schema and protocol time
-        /// rules. Preserve offline/replayed facts instead of applying the legacy 24-hour ingest
-        /// freshness window a second time.
+        /// rules. Preserve offline/replayed facts and their revision ordering without
+        /// revalidating them against the current wall clock.
         /// </summary>
         public void UpsertDurable(ActivitySegmentItem snapshot, long revision) =>
             BufferDurable(snapshot, revision);

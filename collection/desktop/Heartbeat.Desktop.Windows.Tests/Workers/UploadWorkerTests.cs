@@ -73,7 +73,7 @@ public class UploadWorkerTests : IDisposable
         public List<string> Calls { get; } = [];
         public string? ThrowFor { get; set; }
 
-        public Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName)
+        public Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName, CancellationToken cancellationToken = default)
         {
             Calls.Add(appIdentityKey);
             if (string.Equals(appIdentityKey, ThrowFor, StringComparison.OrdinalIgnoreCase))
@@ -108,13 +108,13 @@ public class UploadWorkerTests : IDisposable
 
         var segStream = new UploadStream<ActivitySegmentItem>(
             "段", segSource,
-            batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
             new FakeCache<ActivitySegmentItem>(),
             SnapshotCompaction.KeepLatest);
         var inputCache = new FakeCache<InputEventItem>();
         var inputStream = new UploadStream<InputEventItem>(
             "输入事件", inputSource,
-            batch => api.UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }),
+            (batch, ct) => api.UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }, ct),
             inputCache);
 
         var hubConfig = new HubConfigurationAdapter(cm);

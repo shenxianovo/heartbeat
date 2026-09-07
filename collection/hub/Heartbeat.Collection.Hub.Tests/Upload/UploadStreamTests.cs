@@ -156,7 +156,7 @@ public class UploadStreamTests : IDisposable
         var stream = new UploadStream<ActivitySegmentItem>(
             "段",
             source,
-            batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
             cache,
             SnapshotCompaction.KeepLatest);
         return (stream, source, cache, handler);
@@ -205,7 +205,7 @@ public class UploadStreamTests : IDisposable
         return new UploadStream<ActivitySegmentItem>(
             "segments",
             source,
-            batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
             RealCache(cachePath),
             SnapshotCompaction.KeepLatest,
             new JsonDeadLetterStore<ActivitySegmentItem>(deadLetterPath),
@@ -252,7 +252,7 @@ public class UploadStreamTests : IDisposable
         var stream = new UploadStream<ActivitySegmentItem>(
             "段",
             source,
-            _ => Task.FromResult(++attempts == 1
+            (_, _) => Task.FromResult(++attempts == 1
                 ? new ApiResult(false, 500)
                 : ApiResult.Ok),
             cache);
@@ -423,7 +423,7 @@ public class UploadStreamTests : IDisposable
         var stream = new UploadStream<ActivitySegmentItem>(
             "segments",
             new FakeSource(),
-            batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
             cache,
             SnapshotCompaction.KeepLatest);
 
@@ -515,6 +515,49 @@ public class UploadStreamTests : IDisposable
         Assert.Equal(deadLetterPath, restarted.Status.DeadLetterPath);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationDuringSplit_RetainsOnlyUnconfirmedItems_AndFreshTail(bool durable)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var delivered = Segment();
+        var pending = Segment();
+        var tail = Segment();
+        var cache = new FakeCache();
+        cache.Add([delivered, pending]);
+        var source = new FakeSource();
+        var durableSource = new FakeDurableSource();
+        source.Items.Add(tail);
+        durableSource.Items.Add(tail);
+        var attempts = 0;
+        var stream = new UploadStream<ActivitySegmentItem>("segments",
+            durable ? durableSource : source,
+            (batch, _) =>
+            {
+                attempts++;
+                if (batch.Count > 1) return Task.FromResult(new ApiResult(false, 422));
+                Assert.Equal(delivered.Id, Assert.Single(batch).Id);
+                cancellation.Cancel();
+                return Task.FromResult(ApiResult.Ok);
+            }, cache);
+
+        await stream.DrainAsync(cancellation.Token);
+
+        Assert.Equal(2, attempts);
+        Assert.DoesNotContain(cache.Items, item => item.Id == delivered.Id);
+        if (durable)
+        {
+            Assert.Equal(pending.Id, Assert.Single(cache.Items).Id);
+            Assert.Equal(tail.Id, Assert.Single(durableSource.Items).Id);
+        }
+        else
+        {
+            Assert.Equal(new[] { pending.Id, tail.Id }, cache.Items.Select(item => item.Id));
+            Assert.Empty(source.Items);
+        }
+    }
+
     [Fact]
     public async Task PayloadTooLarge_SplitsBatchUntilAccepted_WithoutDeadLetteringOrRetryingDeliveredItems()
     {
@@ -588,7 +631,7 @@ public class UploadStreamTests : IDisposable
         var stream = new UploadStream<ActivitySegmentItem>(
             "segments",
             source,
-            batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
             RealCache(cachePath),
             SnapshotCompaction.KeepLatest,
             new ThrowingDeadLetterStore<ActivitySegmentItem>());
@@ -614,7 +657,7 @@ public class UploadStreamTests : IDisposable
         var stream = new UploadStream<ActivitySegmentItem>(
             "segments",
             source,
-            batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
             cache);
 
         await stream.DrainAsync();
@@ -639,7 +682,7 @@ public class UploadStreamTests : IDisposable
         var stream = new UploadStream<ActivitySegmentItem>(
             "segments",
             source,
-            _ => Task.FromResult(ApiResult.Ok),
+            (_, _) => Task.FromResult(ApiResult.Ok),
             cache);
 
         await stream.DrainAsync();
@@ -666,7 +709,7 @@ public class UploadStreamTests : IDisposable
         var stream = new UploadStream<ActivitySegmentItem>(
             "segments",
             source,
-            batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+            (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
             cache,
             deadLetterStore: deadLetters);
 

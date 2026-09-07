@@ -14,7 +14,7 @@ public sealed class UploadStream<T>
 {
     private readonly string _label;
     private readonly IUploadSource<T> _source;
-    private readonly Func<List<T>, Task<ApiResult>> _send;
+    private readonly Func<List<T>, CancellationToken, Task<ApiResult>> _send;
     private readonly ICache<T> _cache;
     private readonly Func<List<T>, List<T>>? _compactCached;
     private readonly IDeadLetterStore<T>? _deadLetterStore;
@@ -24,7 +24,7 @@ public sealed class UploadStream<T>
     public UploadStream(
         string label,
         IUploadSource<T> source,
-        Func<List<T>, Task<ApiResult>> send,
+        Func<List<T>, CancellationToken, Task<ApiResult>> send,
         ICache<T> cache,
         Func<List<T>, List<T>>? compactCached = null,
         IDeadLetterStore<T>? deadLetterStore = null,
@@ -70,19 +70,19 @@ public sealed class UploadStream<T>
         SetStatus(ReadyStatus());
     }
 
-    public async Task<List<T>> DrainAsync()
+    public async Task<List<T>> DrainAsync(CancellationToken cancellationToken = default)
     {
         if (Status.State is UploadStreamState.UpdateRequired or UploadStreamState.CacheMigrationFailed)
             return [];
 
-        var cachedResult = await UploadCachedAsync();
+        var cachedResult = await UploadCachedAsync(cancellationToken);
         if (cachedResult.Paused) return [];
 
         var items = _source.Drain();
         if (items.Count == 0) return items;
 
         Log.Information("正在上传 {Count} 条{Label}...", items.Count, _label);
-        var result = await ProcessBatchAsync(items);
+        var result = await ProcessBatchAsync(items, cancellationToken);
         if (_source is IDurableUploadSource<T> durableSource)
             CompleteDurableSourceDrain(durableSource, items, result);
         else if (result.RetryItems.Count > 0)
@@ -124,7 +124,7 @@ public sealed class UploadStream<T>
         }
     }
 
-    private async Task<BatchResult<T>> UploadCachedAsync()
+    private async Task<BatchResult<T>> UploadCachedAsync(CancellationToken cancellationToken)
     {
         List<T> cached;
         try
@@ -147,7 +147,7 @@ public sealed class UploadStream<T>
         var toSend = _compactCached?.Invoke(cached) ?? cached;
         Log.Information("发现 {Count} 条缓存{Label}，尝试上传...", toSend.Count, _label);
 
-        var result = await ProcessBatchAsync(toSend);
+        var result = await ProcessBatchAsync(toSend, cancellationToken);
         try
         {
             _cache.Replace(result.RetryItems);
@@ -178,12 +178,22 @@ public sealed class UploadStream<T>
         return result;
     }
 
-    private async Task<BatchResult<T>> ProcessBatchAsync(List<T> items)
+    private async Task<BatchResult<T>> ProcessBatchAsync(List<T> items, CancellationToken cancellationToken)
     {
         if (items.Count == 0) return BatchResult<T>.Complete;
+        if (cancellationToken.IsCancellationRequested) return BatchResult<T>.Retry(items);
 
-        var response = await _send(items);
+        ApiResult response;
+        try
+        {
+            response = await _send(items, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return BatchResult<T>.Retry(items);
+        }
         if (response.Success) return BatchResult<T>.Complete;
+        if (cancellationToken.IsCancellationRequested) return BatchResult<T>.Retry(items);
 
         if (response.StatusCode == 426)
         {
@@ -202,7 +212,7 @@ public sealed class UploadStream<T>
             if (items.Count == 1)
                 return DeadLetterOrRetry(items[0], response);
 
-            return await SplitBatchAsync(items);
+            return await SplitBatchAsync(items, cancellationToken);
         }
 
         if (response.StatusCode == 413)
@@ -212,7 +222,7 @@ public sealed class UploadStream<T>
             if (items.Count == 1)
                 return BatchResult<T>.Retry(items);
 
-            return await SplitBatchAsync(items);
+            return await SplitBatchAsync(items, cancellationToken);
         }
 
         // Network failures, recoverable auth (401), 408, 429 and 5xx are explicitly retryable.
@@ -220,14 +230,14 @@ public sealed class UploadStream<T>
         return BatchResult<T>.Retry(items);
     }
 
-    private async Task<BatchResult<T>> SplitBatchAsync(List<T> items)
+    private async Task<BatchResult<T>> SplitBatchAsync(List<T> items, CancellationToken cancellationToken)
     {
         var midpoint = items.Count / 2;
-        var left = await ProcessBatchAsync(items.GetRange(0, midpoint));
+        var left = await ProcessBatchAsync(items.GetRange(0, midpoint), cancellationToken);
         if (left.Paused)
             return BatchResult<T>.Pause(left.RetryItems.Concat(items.Skip(midpoint)).ToList());
 
-        var right = await ProcessBatchAsync(items.GetRange(midpoint, items.Count - midpoint));
+        var right = await ProcessBatchAsync(items.GetRange(midpoint, items.Count - midpoint), cancellationToken);
         return new BatchResult<T>(
             left.RetryItems.Concat(right.RetryItems).ToList(),
             right.Paused);

@@ -85,7 +85,7 @@ public class ManagedProcessCollectorProtocolTranscriptTests
         var upload = new UploadStream<ActivitySegmentItem>(
             "reference account segment",
             sink,
-            batch =>
+            (batch, _) =>
             {
                 uploaded = batch;
                 return Task.FromResult(ApiResult.Ok);

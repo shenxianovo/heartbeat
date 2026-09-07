@@ -21,7 +21,8 @@ public static class SegmentValidationPolicy
         && segment.EndTime >= segment.StartTime
         && segment.StartTime.Year >= MinYear
         && segment.EndTime <= now + TimeSkewTolerance
-        && segment.StartTime >= now - TimeSkewTolerance - MaxDuration
+        // Offline delivery may be days late. MaxDuration bounds the observed interval,
+        // not its age at upload; historical facts must remain replayable.
         && (segment.EndTime - segment.StartTime) <= MaxDuration;
 
     public static List<ActivitySegmentItem> Filter(List<ActivitySegmentItem> segments, DateTimeOffset now)

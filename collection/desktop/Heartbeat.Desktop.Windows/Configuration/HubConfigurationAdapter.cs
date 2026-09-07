@@ -133,14 +133,15 @@ public sealed class WindowsHubRuntimeHooks(
             Serilog.Log.Information("检测到已退役的 usage 离线缓存 {Path}（ADR-020），文件保留但不再读取", legacyPath);
     }
 
-    public async Task SegmentsDrainedAsync(IReadOnlyCollection<Heartbeat.Core.DTOs.Segments.ActivitySegmentItem> segments)
+    public async Task SegmentsDrainedAsync(IReadOnlyCollection<Heartbeat.Core.DTOs.Segments.ActivitySegmentItem> segments, CancellationToken cancellationToken = default)
     {
         foreach (var app in segments
                      .Where(segment => !string.IsNullOrEmpty(segment.AppIdentityKey))
                      .Select(segment => (IdentityKey: segment.AppIdentityKey!, segment.AppDisplayName))
                      .DistinctBy(item => item.IdentityKey, StringComparer.OrdinalIgnoreCase))
         {
-            try { await icons.EnsureIconUploadedAsync(app.IdentityKey, app.AppDisplayName); }
+            if (cancellationToken.IsCancellationRequested) break;
+            try { await icons.EnsureIconUploadedAsync(app.IdentityKey, app.AppDisplayName, cancellationToken); }
             catch (Exception ex) { Serilog.Log.Warning(ex, "图标上传失败: {App}", app.IdentityKey); }
         }
     }

@@ -61,12 +61,12 @@ public class HubCompositionTests
         services.AddSingleton(sp => new UploadStream<ActivitySegmentItem>(
             "segments",
             sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>(),
-            _ => Task.FromResult(ApiResult.Ok),
+            (_, _) => Task.FromResult(ApiResult.Ok),
             sp.GetRequiredService<ICache<ActivitySegmentItem>>()));
         services.AddSingleton(sp => new UploadStream<InputEventItem>(
             "input events",
             sp.GetRequiredService<IUploadSource<InputEventItem>>(),
-            _ => Task.FromResult(ApiResult.Ok),
+            (_, _) => Task.FromResult(ApiResult.Ok),
             sp.GetRequiredService<ICache<InputEventItem>>()));
 
         using var provider = services.BuildServiceProvider();

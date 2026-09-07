@@ -103,8 +103,8 @@ public static class MacAgentHostExtensions
             return new UploadStream<ActivitySegmentItem>(
                 "段",
                 sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>(),
-                batch => sp.GetRequiredService<HeartbeatApiClient>()
-                    .UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+                (batch, ct) => sp.GetRequiredService<HeartbeatApiClient>()
+                    .UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
                 sp.GetRequiredService<ICache<ActivitySegmentItem>>(),
                 Heartbeat.Core.SnapshotCompaction.KeepLatest,
                 new JsonDeadLetterStore<ActivitySegmentItem>(Path.Combine(root, "segments-dead-letter.json")),
@@ -117,8 +117,8 @@ public static class MacAgentHostExtensions
             return new UploadStream<InputEventItem>(
                 "输入事件",
                 sp.GetRequiredService<IUploadSource<InputEventItem>>(),
-                batch => sp.GetRequiredService<HeartbeatApiClient>()
-                    .UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }),
+                (batch, ct) => sp.GetRequiredService<HeartbeatApiClient>()
+                    .UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }, ct),
                 sp.GetRequiredService<ICache<InputEventItem>>(),
                 deadLetterStore: new JsonDeadLetterStore<InputEventItem>(Path.Combine(root, "input-events-dead-letter.json")),
                 statusRegistry: sp.GetRequiredService<UploadStatusRegistry>(),

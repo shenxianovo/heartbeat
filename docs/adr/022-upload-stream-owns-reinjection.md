@@ -8,6 +8,11 @@
 
 ## Context
 
+> 2026-09-07 implementation note: 周期 drain 与退出 drain 不得并发。退出先取消并等待周期上传
+> 归还未完成批次，再用 Host 的退出期限执行终态 drain；取消贯穿拆批、HTTP、声明和图标挂点。
+> 期限到达后停止出网，但仍完成本地保留：已成功项提交，未确认项留在缓存、持久源或重注入源。
+> 取消不能绕过“批次不蒸发”不变量，也不能以后台遗留上传替代完成退出。
+
 ADR-020 §5 的上传通道契约是"送达，或落离线缓存，否则原样退回——退回项由调用方重注入源 buffer"。2026-07 的架构评审发现这把"drain 后的批不静默蒸发"不变量摊在三个文件里：通道退回（`UploadChannel`）、编排者重注入（`UsageUploadWorker`）、两个 buffer 各自的幂等重入。理解"上传和缓存都失败会怎样"要同时读三处；而编排这一切的 `UsageUploadWorker` 构造依赖 6 个具体类（含拖着输入钩子的 `InputEventCollector`），防丢分支与 StopAsync 终态 drain 恰好是零覆盖区——ADR-020 §6 用注释钉住的"托管服务注册顺序翻转防丢尾巴"没有任何测试保护。
 
 两条流的 buffer 还各说各话：hub 是 `GetAndClearSegments`/`Accept`，输入侧是 `DrainAll`/`Requeue`（且藏在 collector 的两个纯转发方法后面）。worker 是唯一同时认识两套词汇的地方。

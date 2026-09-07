@@ -69,6 +69,22 @@ public class StrictIngestProtocolTests(PostgresContainerFixture fixture) : Postg
     }
 
     [Fact]
+    public async Task AtomicIngest_AcceptsOfflineSegmentsOlderThanTheMaximumDuration()
+    {
+        await using var db = CreateDbContext();
+        var service = new SegmentIngestApplicationService(db, new DeviceService(db), new UsageService(db));
+        var start = DateTimeOffset.UtcNow.AddDays(-4);
+        var segment = StrictSystemSegment("mac:com.apple.finder", start, start.AddMinutes(5));
+
+        await service.IngestAsync("owner", "hardware", "Device", [segment]);
+
+        var stored = await db.ActivitySegments.SingleAsync();
+        Assert.Equal(segment.Id, stored.Id);
+        Assert.Equal(segment.StartTime.ToUnixTimeSeconds(), stored.StartTime.ToUnixTimeSeconds());
+        Assert.Equal(segment.EndTime.ToUnixTimeSeconds(), stored.EndTime.ToUnixTimeSeconds());
+    }
+
+    [Fact]
     public async Task AtomicIngest_EmptyBatchIsRejectedBeforeAnyProjectionSideEffects()
     {
         await using var db = CreateDbContext();
@@ -388,7 +404,7 @@ public class StrictIngestProtocolTests(PostgresContainerFixture fixture) : Postg
             var stream = new UploadStream<ActivitySegmentItem>(
                 "segments",
                 new EmptySegmentSource(),
-                batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+                (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
                 cache,
                 SnapshotCompaction.KeepLatest,
                 new JsonDeadLetterStore<ActivitySegmentItem>(deadLetterPath));

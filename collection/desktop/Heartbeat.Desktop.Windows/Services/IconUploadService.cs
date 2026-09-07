@@ -8,7 +8,7 @@ namespace Heartbeat.Desktop.Windows.Services;
 
 public interface IIconUploadService
 {
-    Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName);
+    Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName, CancellationToken cancellationToken = default);
 }
 
 public interface IAppIconExtractor
@@ -34,7 +34,7 @@ public sealed class IconUploadService(
 {
     private readonly HashSet<string> _uploadedIdentities = new(StringComparer.OrdinalIgnoreCase);
 
-    public async Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName)
+    public async Task EnsureIconUploadedAsync(string appIdentityKey, string? appDisplayName, CancellationToken cancellationToken = default)
     {
         if (compatibilityStatus.Current.UpdateRequired) return;
 
@@ -53,7 +53,7 @@ public sealed class IconUploadService(
             AppIdentityKey = normalized,
             AppDisplayName = appDisplayName,
             IconData = iconData
-        });
+        }, cancellationToken);
         if (result.StatusCode == 426)
         {
             compatibilityStatus.RequireUpdate(result.ResponseBody);

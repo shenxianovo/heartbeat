@@ -117,7 +117,7 @@ namespace Heartbeat.Desktop.Windows.Hosting
                 return new UploadStream<ActivitySegmentItem>(
                     "段",
                     sp.GetRequiredService<IUploadSource<ActivitySegmentItem>>(),
-                    batch => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }),
+                    (batch, ct) => api.UploadSegmentsAsync(new SegmentUploadRequest { Segments = batch }, ct),
                     sp.GetRequiredService<ICache<ActivitySegmentItem>>(),
                     SnapshotCompaction.KeepLatest,
                     new JsonDeadLetterStore<ActivitySegmentItem>(
@@ -131,7 +131,7 @@ namespace Heartbeat.Desktop.Windows.Hosting
                 return new UploadStream<InputEventItem>(
                     "输入事件",
                     sp.GetRequiredService<IUploadSource<InputEventItem>>(),
-                    batch => api.UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }),
+                    (batch, ct) => api.UploadInputEventsAsync(new InputEventUploadRequest { Events = batch }, ct),
                     sp.GetRequiredService<ICache<InputEventItem>>(),
                     deadLetterStore: new JsonDeadLetterStore<InputEventItem>(
                         Path.Combine(dataDirectory, "input-events-dead-letter.json")),

@@ -25,6 +25,14 @@ public class SegmentValidationPolicyTests
     };
 
     [Fact]
+    public void OfflineBacklog_WithValidDuration_PassesAfterSeveralDays()
+    {
+        var segment = Segment(Now.AddDays(-4), Now.AddDays(-4).AddMinutes(5));
+
+        Assert.True(SegmentValidationPolicy.IsValid(segment, Now));
+    }
+
+    [Fact]
     public void ValidSegment_Passes()
     {
         var result = SegmentValidationPolicy.Filter(

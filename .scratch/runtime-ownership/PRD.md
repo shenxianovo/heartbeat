@@ -13,7 +13,7 @@ Operation，UI/HTTP token 仅取消等待；Host 内部 owner 管理安全取消
 Desktop 可从 Host snapshot 恢复操作展示，重启仅恢复 Installation/Instance。03–05 尚未实施，01 的原生
 人工验收仍未执行，因此整份 PRD 保持 `ready-for-human`。
 
-2026-09-07：Ticket 03 按用户澄清，以解耦与提高可维护性为目标推进：Headless 复用共享 Host
+2026-09-07：Ticket 03 按用户澄清，以解耦与提高可维护性为目标完成：Headless 复用共享 Host
 组合与生命周期，删除 Fleet 的重复 owner 和管理转发；HTTP/管理页只适配已有操作契约。
 01 的原生人工验收和 04–05 仍为剩余工作，整份 PRD 保持 `ready-for-human`。
 

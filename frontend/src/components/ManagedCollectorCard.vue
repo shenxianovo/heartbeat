@@ -31,7 +31,7 @@ watch(
 )
 
 watch(() => props.operation, operation => {
-  if (operation?.kind === 'SubmitAuthorization' && operation.phase === 'Failed') submitted.value = false
+  if (operation?.kind === 'SubmitAuthorization' && ['Failed', 'Cancelled'].includes(operation.phase)) submitted.value = false
 })
 
 const statusTitle = computed(() => {

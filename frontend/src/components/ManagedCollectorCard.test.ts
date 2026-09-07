@@ -42,7 +42,7 @@ describe('ManagedCollectorCard', () => {
     expect(wrapper.text()).not.toContain('http')
   })
 
-  it('renders and submits a generic authorization challenge after installation', async () => {
+  it('can resubmit the same authorization challenge after explicit cancellation', async () => {
     const wrapper = mount(ManagedCollectorCard, {
       props: { collector: {
         packageId: 'heartbeat.collector.reference',
@@ -70,5 +70,14 @@ describe('ManagedCollectorCard', () => {
       '0198d5df-5df3-70a1-937d-68a7d64623e4',
       { token: 'secret' },
     )
+    await wrapper.setProps({ operation: {
+      operationId: 'authorization-operation', packageId: 'heartbeat.collector.reference',
+      kind: 'SubmitAuthorization', phase: 'Cancelled', isTerminal: true,
+    } })
+    expect((wrapper.get('button[type="submit"]').element as HTMLButtonElement).disabled).toBe(false)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(api.submitCollectorAuthorization).toHaveBeenCalledTimes(2)
+
   })
 })

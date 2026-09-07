@@ -149,4 +149,4 @@ Analytics 启动只预插 System 的 Observation Depth 声明。非 BuiltIn Coll
 - [`collection/desktop/Heartbeat.Desktop.Windows/Hosting/AgentHostExtensions.cs`](../../collection/desktop/Heartbeat.Desktop.Windows/Hosting/AgentHostExtensions.cs) — Windows 组合根
 - [`collection/desktop/Heartbeat.Desktop.Mac/Hosting/MacAgentHostExtensions.cs`](../../collection/desktop/Heartbeat.Desktop.Mac/Hosting/MacAgentHostExtensions.cs) — macOS 组合根
 - [`collection/desktop/Heartbeat.Desktop.UI/Diagnostics/DesktopStartupSmoke.cs`](../../collection/desktop/Heartbeat.Desktop.UI/Diagnostics/DesktopStartupSmoke.cs) — 宿主通用 startup smoke
-- [`collection/hub/Heartbeat.Collection.Headless/HeadlessFleetManager.cs`](../../collection/hub/Heartbeat.Collection.Headless/HeadlessFleetManager.cs) — 逐 Instance 隔离与真实失败原因
+- [`collection/hub/Heartbeat.Collection.Headless/HeadlessCollectorReadModel.cs`](../../collection/hub/Heartbeat.Collection.Headless/HeadlessCollectorReadModel.cs) — 逐 Instance 隔离与真实失败原因

@@ -21,7 +21,7 @@ public sealed class CollectorMarketplaceHost : IAsyncDisposable, IDisposable
         {
             _runtime = new CollectorMarketplaceRuntime(
                 new CollectorPackageMarketplace(http, options.RegistryRoot, options.Target, installations),
-                installations, runtime, options.Target, adapter);
+                installations, runtime, options.Target, adapter, options.ManagedProcessOptions);
             _transport = http;
             Management = new ManagementFacade(_runtime);
         }

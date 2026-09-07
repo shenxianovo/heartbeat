@@ -26,12 +26,12 @@ flowchart LR
   subgraph Headless["Headless Collection Host"]
     WEB["Vue management UI + nginx"]
     API["Management API"]
-    FLEET["HeadlessFleetManager\none Runtime, many Instances"]
+    FLEET["CollectorMarketplaceHost\nshared Runtime ownership"]
     CHILD["ManagedProcess Collector\nReference / VRChat"]
     PIPE["HeadlessInstancePipelines\nprojection + status + upload lifecycle"]
     HCACHE["Per-Subject upload streams + cache"]
 
-    WEB -->|"HTTPS REST + SSE\nOIDC/JWT"| API
+    WEB -->|"HTTPS REST polling\nOIDC/JWT"| API
     API -->|"typed commands / status"| FLEET
     FLEET <-->|"NDJSON over stdio\nCollector Protocol v1"| CHILD
     CHILD -->|"VRChat HTTPS API"| VRCHAT["VRChat API"]

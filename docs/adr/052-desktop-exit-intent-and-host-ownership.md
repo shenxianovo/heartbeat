@@ -81,6 +81,21 @@ operation owner 是 Marketplace Runtime 内部 module，不是持久任务框架
 重启只从 Collector Runtime State 与 Installation 恢复 Instance，不恢复 operation history；未提交或已取消操作
 可重新发起。该有限承诺刻意不包含跨重启队列、断点续装、进度历史或通用调度框架。
 
+## Headless 共享 Host 实施（Ticket 03）
+
+本片以解耦与可维护性为目标。Headless 组合根复用 `AddCollectorRuntime`、`AddCollectorMarketplace`、
+`CollectorMarketplaceHost` 和共享 hosted lifecycle worker；Fleet 自建 Runtime、Marketplace、HTTP 资源、
+初始化信号、管理转发与同步释放路径被删除。原 Fleet 仅余展示职责，命名为 `HeadlessCollectorReadModel`。
+Headless adapter 保留 Subject 创建、逐 Instance 投影和上传，管理收尾仍先于最终上传。
+
+HTTP 直接接纳共享 Host Management Operation，并提供同一契约的结果查询和显式取消；所有路由保留 owner
+与 client 校验。管理页读取 Host 结果，删除用 Collector 状态 fingerprint 推断操作完成的路径；操作查询
+独立于可能等待变更结束的 Catalog 查询。此处只是既有操作契约的调用适配，不新增调度、历史或续作语义。
+
+真实 Host 回归替代手动创建 Fleet 的生命周期测试，覆盖正常启动/停止/异步释放、安装卸载、离线恢复、
+HTTP 重新连接后的结果查询与取消、owner/client 拒绝和 Account 投影隔离。旧组合的双重 DI 捕获会重复释放
+Fleet 的 CancellationTokenSource，该问题已由删除重复资源 owner 路径消除。
+
 ## 尚待裁决
 
 - 退出期限与末次联网交付的预算；达到期限后的 UI 行为。

@@ -134,41 +134,65 @@ export interface ManagedCollectorStatus {
   } | null
 }
 
-export async function fetchManagedCollectors(): Promise<ManagedCollectorStatus[]> {
-  const response = await authHttp.fetch('/hub/api/v1/collectors')
+export interface HostManagementOperation {
+  operationId: string
+  packageId: string
+  kind: 'Install' | 'Retry' | 'Uninstall' | 'SubmitAuthorization'
+  phase: 'Pending' | 'Running' | 'Committing' | 'Succeeded' | 'Cancelled' | 'Failed'
+  isTerminal: boolean
+  failure?: string | null
+}
+
+export async function fetchManagedOperations(signal?: AbortSignal): Promise<HostManagementOperation[]> {
+  const response = await authHttp.fetch('/hub/api/v1/operations', { signal })
+  if (!response.ok) throw new ApiException('Hub operation query failed.', response.status, await response.text(), {}, null)
+  return await response.json() as HostManagementOperation[]
+}
+
+export async function cancelManagedOperation(operationId: string): Promise<string> {
+  const response = await authHttp.fetch(`/hub/api/v1/operations/${encodeURIComponent(operationId)}/cancellation`, { method: 'POST' })
+  if (!response.ok && response.status !== 409) throw new ApiException('Hub operation cancellation failed.', response.status, await response.text(), {}, null)
+  return await response.json() as string
+}
+
+export async function fetchManagedCollectors(signal?: AbortSignal): Promise<ManagedCollectorStatus[]> {
+  const response = await authHttp.fetch('/hub/api/v1/collectors', { signal })
   if (!response.ok) throw new ApiException('Hub Collector catalog request failed.', response.status, await response.text(), {}, null)
   return await response.json() as ManagedCollectorStatus[]
 }
 
-export async function installManagedCollector(packageId: string): Promise<void> {
+export async function installManagedCollector(packageId: string): Promise<HostManagementOperation> {
   const response = await authHttp.fetch(
     `/hub/api/v1/collectors/${encodeURIComponent(packageId)}/installation`,
     { method: 'POST' },
   )
   if (!response.ok) throw new ApiException('Hub Collector installation failed.', response.status, await response.text(), {}, null)
+  return await response.json() as HostManagementOperation
 }
 
-export async function uninstallManagedCollector(packageId: string): Promise<void> {
+export async function uninstallManagedCollector(packageId: string): Promise<HostManagementOperation> {
   const response = await authHttp.fetch(
     `/hub/api/v1/collectors/${encodeURIComponent(packageId)}/installation`,
     { method: 'DELETE' },
   )
   if (!response.ok) throw new ApiException('Hub Collector uninstall failed.', response.status, await response.text(), {}, null)
+  return await response.json() as HostManagementOperation
 }
 
-export async function retryManagedCollector(packageId: string): Promise<void> {
+export async function retryManagedCollector(packageId: string): Promise<HostManagementOperation> {
   const response = await authHttp.fetch(
     `/hub/api/v1/collectors/${encodeURIComponent(packageId)}/activation`,
     { method: 'POST' },
   )
   if (!response.ok) throw new ApiException('Hub Collector activation retry failed.', response.status, await response.text(), {}, null)
+  return await response.json() as HostManagementOperation
 }
 
 export async function submitCollectorAuthorization(
   collectorInstanceId: string,
   interactionId: string,
   values: Record<string, string>,
-): Promise<void> {
+): Promise<HostManagementOperation> {
   const response = await authHttp.fetch(
     `/hub/api/v1/collector-instances/${encodeURIComponent(collectorInstanceId)}/authorization/${encodeURIComponent(interactionId)}`,
     {
@@ -178,6 +202,7 @@ export async function submitCollectorAuthorization(
     },
   )
   if (!response.ok) throw new ApiException('Hub authorization response failed.', response.status, await response.text(), {}, null)
+  return await response.json() as HostManagementOperation
 }
 
 const client = new Client(BASE_URL, authHttp)

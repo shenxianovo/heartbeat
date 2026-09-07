@@ -13,6 +13,8 @@ public sealed record CollectorRuntimeStorageOptions(string DataDirectory);
 
 public sealed record CollectorMarketplaceHostOptions(Uri RegistryRoot, CollectorMarketplaceTarget Target)
 {
+    public ManagedProcessActivationOptions? ManagedProcessOptions { get; init; }
+
     public static readonly Uri OfficialRegistryRoot =
         new("https://heartbeat.shenxianovo.com/collector-registry/v1/");
 }

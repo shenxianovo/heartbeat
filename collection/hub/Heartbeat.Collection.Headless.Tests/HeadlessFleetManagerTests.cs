@@ -68,14 +68,18 @@ public sealed class HeadlessFleetManagerTests : IDisposable
         var firstId = Guid.CreateVersion7();
         var secondId = Guid.CreateVersion7();
         var subject = new SubjectReference(Guid.CreateVersion7(), SubjectKind.Account);
+        var secondSubject = new SubjectReference(Guid.CreateVersion7(), SubjectKind.Account);
         pipelines.Add(firstId, subject, "First");
-        pipelines.Add(secondId, subject, "Second");
+        pipelines.Add(secondId, secondSubject, "Second");
         var projection = (ISubjectSegmentProjectionSink)pipelines;
         var now = DateTimeOffset.UtcNow;
         projection.UpsertDurable(new CollectorProjectionContext(firstId, subject), Segment("first", now), 1, false);
-        projection.UpsertDurable(new CollectorProjectionContext(secondId, subject), Segment("second", now), 1, false);
+        projection.UpsertDurable(new CollectorProjectionContext(secondId, secondSubject), Segment("second", now), 1, false);
 
         await pipelines.DrainAllAsync();
+        Assert.Contains(upload.Sent, sent => sent.InstanceId == firstId && sent.Subject == subject && sent.Title == "first");
+        Assert.Contains(upload.Sent, sent => sent.InstanceId == secondId && sent.Subject == secondSubject && sent.Title == "second");
+        Assert.DoesNotContain(upload.Sent, sent => sent.InstanceId == firstId && sent.Subject == secondSubject);
         await pipelines.RemoveAsync(firstId);
 
         Assert.False(Directory.Exists(Path.Combine(_directory, "instances", firstId.ToString("D"))));
@@ -97,12 +101,17 @@ public sealed class HeadlessFleetManagerTests : IDisposable
     private sealed class RecordingSegmentUpload : IHeadlessSegmentUpload
     {
         public HashSet<Guid> Removed { get; } = [];
+        public List<(Guid InstanceId, SubjectReference Subject, string? Title)> Sent { get; } = [];
 
         public Task<ApiResult> SendAsync(
             Guid collectorInstanceId,
             SubjectReference subject,
             string displayName,
-            List<ActivitySegmentItem> batch, CancellationToken cancellationToken = default) => Task.FromResult(ApiResult.Ok);
+            List<ActivitySegmentItem> batch, CancellationToken cancellationToken = default)
+        {
+            Sent.AddRange(batch.Select(item => (collectorInstanceId, subject, item.Title)));
+            return Task.FromResult(ApiResult.Ok);
+        }
 
         public void Remove(Guid collectorInstanceId) => Removed.Add(collectorInstanceId);
         public void Dispose() { }

@@ -6,15 +6,17 @@ import {
   submitCollectorAuthorization,
   uninstallManagedCollector,
   type ManagedCollectorStatus,
+  type HostManagementOperation,
 } from '../api/index'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 
-const props = defineProps<{ collector: ManagedCollectorStatus }>()
+const props = defineProps<{ collector: ManagedCollectorStatus; operation?: HostManagementOperation }>()
 const emit = defineEmits<{ changed: [packageId: string] }>()
 const values = reactive<Record<string, string>>({})
 const error = ref('')
-const busy = ref(false)
+const submitting = ref(false)
+const busy = computed(() => submitting.value || (!!props.operation && !props.operation.isTerminal))
 const submitted = ref(false)
 
 watch(
@@ -27,6 +29,10 @@ watch(
   },
   { immediate: true },
 )
+
+watch(() => props.operation, operation => {
+  if (operation?.kind === 'SubmitAuthorization' && operation.phase === 'Failed') submitted.value = false
+})
 
 const statusTitle = computed(() => {
   if (!props.collector.isInstalled) return '可安装'
@@ -47,7 +53,7 @@ const statusDescription = computed(() => {
 
 async function install() {
   if (busy.value) return
-  busy.value = true
+  submitting.value = true
   error.value = ''
   try {
     await installManagedCollector(props.collector.packageId)
@@ -55,14 +61,14 @@ async function install() {
   } catch {
     error.value = '安装失败，请稍后重试或检查 Hub 日志'
   } finally {
-    busy.value = false
+    submitting.value = false
   }
 }
 
 async function uninstall() {
   if (busy.value) return
   if (!window.confirm(`卸载 ${props.collector.displayName}？它的登录信息和本地数据也会被删除。`)) return
-  busy.value = true
+  submitting.value = true
   error.value = ''
   try {
     await uninstallManagedCollector(props.collector.packageId)
@@ -70,13 +76,13 @@ async function uninstall() {
   } catch {
     error.value = '卸载失败，请稍后重试或检查 Hub 日志'
   } finally {
-    busy.value = false
+    submitting.value = false
   }
 }
 
 async function retry() {
   if (busy.value) return
-  busy.value = true
+  submitting.value = true
   error.value = ''
   try {
     await retryManagedCollector(props.collector.packageId)
@@ -84,14 +90,14 @@ async function retry() {
   } catch {
     error.value = '重试失败，请检查 Hub 日志'
   } finally {
-    busy.value = false
+    submitting.value = false
   }
 }
 
 async function submitAuthorization() {
   const authorization = props.collector.authorization
   if (!authorization || busy.value || submitted.value) return
-  busy.value = true
+  submitting.value = true
   error.value = ''
   try {
     if (!props.collector.collectorInstanceId) throw new Error('Collector Instance is not initialized.')
@@ -105,7 +111,7 @@ async function submitAuthorization() {
   } catch {
     error.value = '提交失败，请确认信息后重试'
   } finally {
-    busy.value = false
+    submitting.value = false
   }
 }
 </script>

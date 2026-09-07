@@ -6,6 +6,8 @@ import HubManagementView from './HubManagementView.vue'
 
 const api = vi.hoisted(() => ({
   fetchManagedCollectors: vi.fn(),
+  fetchManagedOperations: vi.fn(async () => []),
+  cancelManagedOperation: vi.fn(),
   installManagedCollector: vi.fn(async () => undefined),
   uninstallManagedCollector: vi.fn(async () => undefined),
   retryManagedCollector: vi.fn(async () => undefined),
@@ -43,37 +45,13 @@ describe('HubManagementView', () => {
     wrapper.unmount()
   })
 
-  it('keeps refreshing after an accepted command until the Collector state changes', async () => {
+  it('restores Host operations even while the Collector catalog cannot finish loading', async () => {
     vi.useFakeTimers()
-    const firstAuthorization = {
-      packageId: 'heartbeat.collector.reference',
-      displayName: 'Reference Collector',
-      summary: 'Generic fixture',
-      isInstalled: true,
-      installedVersion: '1.0.0',
-      collectorInstanceId: '0198d5df-5df3-70a1-937d-68a7d64623e3',
-      phase: 'WaitingForAuthorization',
-      authorization: {
-        interactionId: '0198d5df-5df3-70a1-937d-68a7d64623e4',
-        kind: 'Credentials' as const,
-        title: 'Sign in',
-        fields: [{ name: 'token', label: 'Token', isSecret: true }],
-      },
-    }
-    const secondAuthorization = {
-      ...firstAuthorization,
-      authorization: {
-        interactionId: '0198d5df-5df3-70a1-937d-68a7d64623e5',
-        kind: 'VerificationCode' as const,
-        title: 'Enter verification code',
-        fields: [{ name: 'code', label: 'Code', isSecret: false }],
-      },
-    }
-    api.fetchManagedCollectors
-      .mockResolvedValueOnce([firstAuthorization])
-      .mockResolvedValueOnce([firstAuthorization])
-      .mockResolvedValueOnce([secondAuthorization])
-
+    api.fetchManagedCollectors.mockReturnValue(new Promise(() => {}))
+    api.fetchManagedOperations.mockResolvedValue([{
+      operationId: 'operation-1', packageId: 'reference', kind: 'Install',
+      phase: 'Running', isTerminal: false,
+    }] as never)
     const wrapper = mount(HubManagementView, {
       global: { stubs: {
         Card: { template: '<section><slot /></section>' },
@@ -82,23 +60,22 @@ describe('HubManagementView', () => {
       } },
     })
     await flushPromises()
-
-    await wrapper.get('input').setValue('secret')
-    await wrapper.get('form').trigger('submit')
+    expect(wrapper.text()).toContain('安装中')
+    const cancel = wrapper.findAll('button').find(button => button.text() === '取消')!
+    await cancel.trigger('click')
     await flushPromises()
+    expect(api.cancelManagedOperation).toHaveBeenCalledWith('operation-1')
 
-    expect(api.fetchManagedCollectors).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).toContain('已提交，等待采集器响应…')
-
-    await vi.advanceTimersByTimeAsync(1_000)
+    api.fetchManagedOperations.mockResolvedValue([{
+      operationId: 'operation-1', packageId: 'reference', kind: 'Install',
+      phase: 'Failed', isTerminal: true, failure: 'Registry unavailable',
+    }] as never)
+    await vi.advanceTimersByTimeAsync(5_000)
     await flushPromises()
-
-    expect(api.fetchManagedCollectors).toHaveBeenCalledTimes(3)
-    expect(wrapper.text()).toContain('Enter verification code')
-    expect(wrapper.text()).not.toContain('已提交，等待采集器响应…')
-
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(api.fetchManagedCollectors).toHaveBeenCalledTimes(3)
+    expect(wrapper.text()).toContain('Registry unavailable')
     wrapper.unmount()
+    const calls = api.fetchManagedOperations.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(api.fetchManagedOperations).toHaveBeenCalledTimes(calls)
   })
 })

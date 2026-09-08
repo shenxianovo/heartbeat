@@ -69,23 +69,29 @@ public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
     /// <summary>Called from the running desktop UI thread, including native shutdown callbacks.</summary>
     public Task RequestExitAsync(DesktopExitReason reason)
     {
-        _admission.Close();
-        TaskCompletionSource completion;
-        lock (_gate)
+        TaskCompletionSource? completion = null;
+        Task exiting = null!;
+        _admission.Close(() =>
         {
-            if (_exit is not null)
+            lock (_gate)
             {
-                if (_reason != reason)
-                    throw new InvalidOperationException($"Desktop exit intent is already fixed as {_reason}.");
-                return _exit;
+                if (_exit is not null)
+                {
+                    if (_reason != reason)
+                        throw new InvalidOperationException($"Desktop exit intent is already fixed as {_reason}.");
+                }
+                else
+                {
+                    if (_desktop is null) throw new InvalidOperationException("No desktop is attached.");
+                    completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _exit = completion.Task;
+                    _reason = reason;
+                }
+                exiting = _exit;
             }
-            if (_desktop is null) throw new InvalidOperationException("No desktop is attached.");
-            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            _exit = completion.Task;
-            _reason = reason;
-        }
-        _ = CompleteExitAsync(reason, completion);
-        return completion.Task;
+        });
+        if (completion is not null) _ = CompleteExitAsync(reason, completion);
+        return exiting;
     }
 
     /// <summary>Native async event handlers must not turn a refused exit into an unhandled exception.</summary>

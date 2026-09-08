@@ -81,6 +81,32 @@ public sealed class DesktopApplicationLifetimeTests
         finally { release.SetResult(); ui.RunUntil(exiting); }
     }
 
+    [Fact]
+    public void FailingAdmissionObserver_CannotReplaceIntentOrSkipShutdown()
+    {
+        using var ui = new UiContext();
+        var host = new TestHost(new YieldingResource());
+        using var lifetime = new DesktopApplicationLifetime(host);
+        var desktop = new DesktopParticipant();
+        lifetime.Attach(desktop);
+        var admission = host.Services.GetRequiredService<HostOperationAdmission>();
+        var observed = false;
+        admission.Closed += () => throw new IOException("UI observer failed");
+        admission.Closed += () =>
+        {
+            observed = true;
+            Assert.Throws<InvalidOperationException>(() => { _ = lifetime.RequestExitAsync(DesktopExitReason.UpdateRestart); });
+        };
+        var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
+        ui.RunUntil(exiting);
+        Assert.True(observed);
+        Assert.True(exiting.IsCompletedSuccessfully);
+        Assert.Equal(DesktopExitReason.Quit, host.Updates.Reason);
+        Assert.Equal(1, host.StopCalls);
+        Assert.Equal(1, desktop.ExitCalls);
+        Assert.Same(exiting, lifetime.RequestExitAsync(DesktopExitReason.Quit));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData(1)]

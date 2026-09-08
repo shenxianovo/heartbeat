@@ -309,7 +309,6 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
             await AttachAsync(installed, operationToken);
             beginCommit();
             await StopManagedAsync(inspection.Instance.CollectorInstanceId, CancellationToken.None);
-            ClearHostFailure(inspection.Instance.CollectorInstanceId);
             StartSelectedDriver(installed);
             return Snapshot(CatalogItem(installed), inspection);
         }
@@ -564,10 +563,11 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         {
             if (current.Task is { IsCompleted: false })
                 return;
-            current.Dispose();
+            RetireManaged(current);
         }
         var entry = new ManagedEntry();
         _managed[id] = entry;
+        ClearHostFailure(id);
         entry.Task = ActivateManagedAsync(installed, entry);
     }
 
@@ -616,13 +616,18 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
         {
             if (entry.Task?.IsCompleted != false && entry.Started.Task.IsCompleted)
             {
-                var drain = entry.Activation?.ProtocolDrainResult?.LogicalResult;
-                _retiredRemainder += drain is { RemainderDurable: true, PendingFacts: { } facts, PendingGaps: { } gaps }
-                    ? new DeliveryRemainder(facts + gaps, 0) : DeliveryRemainder.Unknown;
                 _managed.Remove(collectorInstanceId);
-                entry.Dispose();
+                RetireManaged(entry);
             }
         }
+    }
+
+    private void RetireManaged(ManagedEntry entry)
+    {
+        var drain = entry.Activation?.ProtocolDrainResult?.LogicalResult;
+        _retiredRemainder += drain is { RemainderDurable: true, PendingFacts: { } facts, PendingGaps: { } gaps }
+            ? new DeliveryRemainder(facts + gaps, 0) : DeliveryRemainder.Unknown;
+        entry.Dispose();
     }
 
     private CollectorMarketplaceRuntimeItem Snapshot(

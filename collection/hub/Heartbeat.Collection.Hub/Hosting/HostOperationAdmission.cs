@@ -20,13 +20,19 @@ public sealed class HostOperationAdmission
 
     public void Run(Action accept) => Run(() => { accept(); return true; });
 
-    public void Close()
+    public void Close(Action? commit = null)
     {
         lock (_gate)
         {
+            commit?.Invoke();
             if (_closed) return;
             _closed = true;
         }
-        Closed?.Invoke();
+        if (Closed is not { } observers) return;
+        foreach (Action observer in observers.GetInvocationList())
+        {
+            try { observer(); }
+            catch (Exception exception) { Serilog.Log.Warning(exception, "接纳已关闭，忽略观察者通知失败"); }
+        }
     }
 }

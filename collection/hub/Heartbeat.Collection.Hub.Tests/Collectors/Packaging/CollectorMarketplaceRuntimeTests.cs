@@ -550,8 +550,10 @@ public sealed class CollectorMarketplaceRuntimeTests : IDisposable
             Assert.Single(marketplace.InstalledSnapshot()).Phase);
     }
 
-    [Fact]
-    public async Task Retry_ClearsThePreviousManagedFailureAfterTheReplacementIsReady()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplacementReady_PreservesUnknownCustodyFromThePreviousActivation(bool installAgain)
     {
         using var package = ManagedReferenceCollectorPackage.Create();
         var installations = new CollectorPackageInstallations(Path.Combine(_root, "packages"));
@@ -586,7 +588,8 @@ public sealed class CollectorMarketplaceRuntimeTests : IDisposable
             Assert.Single(marketplace.InstalledSnapshot()).Phase);
 
         environment.Clear();
-        await CompleteOperationAsync(marketplace, marketplace.Retry(installed.PackageId));
+        await CompleteOperationAsync(marketplace, installAgain
+            ? marketplace.Install(installed.PackageId) : marketplace.Retry(installed.PackageId));
         using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await runtime.WaitForManagedProcessPhaseAsync(
             installed.CollectorInstanceId.Value,
@@ -594,6 +597,8 @@ public sealed class CollectorMarketplaceRuntimeTests : IDisposable
             readyTimeout.Token);
 
         var recovered = Assert.Single(marketplace.InstalledSnapshot());
+        await marketplace.StopAsync();
+        Assert.False(marketplace.ShutdownRemainder.IsDurable);
         Assert.Equal(CollectorMarketplaceRuntimePhase.Running, recovered.Phase);
         Assert.Null(recovered.Failure);
     }

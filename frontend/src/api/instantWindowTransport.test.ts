@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchPublicKeyFrequency,
+  fetchPublicInputCounts,
   fetchPublicSegments,
   fetchPublicUsage,
 } from './index'
@@ -42,6 +43,9 @@ describe('generic Instant Window transports', () => {
       text: async () => JSON.stringify({ keys: [] }),
     } as Response)
     await fetchPublicKeyFrequency('alice', { deviceId: 7, start, end })
+
+    await fetchPublicInputCounts('alice', { deviceId: 0, start, end })
+    expectRequest(3, '/api/v1/users/alice/input-events/counts', { start, end })
 
     expectRequest(0, '/api/v1/users/alice/usage', { start, end })
     expectRequest(1, '/api/v1/users/alice/segments', {

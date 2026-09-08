@@ -6,7 +6,7 @@ import {
 } from '../api/index'
 import { useAsyncData } from '../composables/useAsyncData'
 import RecapCorrection from './RecapCorrection.vue'
-import { Card } from '@/components/ui/card'
+import DashboardCard from './DashboardCard.vue'
 import { sameCalendarWindow, type CalendarContext } from '../calendar/localCalendarWindow'
 
 /**
@@ -232,92 +232,90 @@ const errorMessage = computed(() => {
 </script>
 
 <template>
-  <Card v-if="!isUnavailableToVisitor" class="mb-6 gap-3 border-border/60 bg-card/80 py-5 backdrop-blur-sm">
-    <div class="flex flex-col gap-3 px-5">
-      <div class="flex items-center justify-between gap-3">
-        <h2 class="text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">这一天 · Recap</h2>
-        <button
-          v-if="canRegenerate && recap.data.value && !recap.data.value.isEmpty"
-          class="glass-control cursor-pointer whitespace-nowrap px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-50"
-          :disabled="recap.pending.value || streaming"
-          title="用最新数据重新生成这一天的回顾"
-          @click="generate()"
-        >重新生成</button>
-      </div>
-
-      <!-- 首次读取中（无旧数据可展示时） -->
-      <div v-if="recap.pending.value && !recap.data.value" class="py-6 text-center text-[0.9rem] text-muted-foreground">
-        <span class="recap-thinking">正在回忆这一天…</span>
-      </div>
-
-      <!-- 读取出错（保留上次成功的叙事时不打断阅读，只在无数据时占位） -->
-      <div
-        v-else-if="errorMessage && !recap.data.value"
-        class="flex items-center justify-between gap-3 py-2 text-[0.85rem] text-muted-foreground"
-      >
-        <span>{{ errorMessage }}</span>
-        <button
-          class="glass-control shrink-0 cursor-pointer px-2.5 py-1 text-[0.75rem]"
-          :disabled="recap.pending.value"
-          @click="load()"
-        >重试</button>
-      </div>
-
-      <!-- 空日 -->
-      <div v-else-if="recap.data.value?.isEmpty" class="py-6 text-center text-[0.9rem] text-muted-foreground">
-        这一天没有记录。
-      </div>
-
-      <!-- 生成中但还没有首个 delta：思考期可能长达数分钟，推理透传把这段沉默变成进度 -->
-      <div v-else-if="streaming && !narrative" class="flex flex-col gap-3 py-4">
-        <div class="text-center text-[0.9rem] text-muted-foreground">
-          <span class="recap-thinking">{{ thinkingText ? '正在思考…' : '正在回忆这一天…' }}</span>
-        </div>
-        <!--
-          推理面板：min-h == max-h 是刻意的固定高度——推理是每秒几十字符地长，
-          让容器跟着内容长会把整张卡片顶得一直抖；固定一格 9rem 只在首个推理到达时占位一次。
-          recap-thinking-panel 同时是滚动行为的样式与测试锚点（见 style 块）。
-        -->
-        <div
-          v-if="thinkingText"
-          ref="thinkingPanel"
-          class="recap-thinking-panel min-h-[9rem] max-h-[9rem] overflow-y-auto whitespace-pre-wrap rounded-md border border-border/50 bg-muted/25 px-3 py-2 text-[0.78rem] leading-relaxed text-muted-foreground"
-          @scroll="onThinkingScroll"
-        >{{ thinkingText }}</div>
-      </div>
-
-      <!-- 有数据但没有叙事：从未生成，且此刻没有生成在途（生成失败后也落在这里） -->
-      <div
-        v-else-if="recap.data.value && !narrative"
-        class="flex items-center justify-between gap-3 py-2 text-[0.85rem] text-muted-foreground"
-      >
-        <span>{{ streamError || '这一天还没有回顾。' }}</span>
-        <button
-          v-if="canRegenerate"
-          class="glass-control shrink-0 cursor-pointer px-2.5 py-1 text-[0.75rem]"
-          :disabled="streaming"
-          @click="generate()"
-        >生成</button>
-      </div>
-
-      <!-- 叙事 -->
-      <template v-else-if="recap.data.value">
-        <div class="flex flex-col gap-2.5 text-[0.92rem] leading-relaxed text-foreground/90">
-          <p v-for="(p, i) in paragraphs" :key="i">{{ p }}</p>
-        </div>
-        <div class="flex items-center justify-between gap-3 text-[0.72rem] text-muted-foreground/80">
-          <span v-if="generatedAtStr">生成于 {{ generatedAtStr }}<template v-if="recap.data.value.model"> · {{ recap.data.value.model }}</template></span>
-          <span v-else>&nbsp;</span>
-          <span v-if="streaming" class="recap-thinking">正在生成…</span>
-          <span v-else-if="streamError">{{ streamError }}</span>
-          <span v-else-if="errorMessage">{{ errorMessage }}</span>
-        </div>
-
-        <!-- 纠正入口：owner-only。写知识，不是散文补丁 -->
-        <RecapCorrection v-if="canRegenerate" :calendar-context="calendarContext" :regenerate="regenerateForCorrection" />
-      </template>
+  <DashboardCard v-if="!isUnavailableToVisitor">
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="text-sm font-semibold text-foreground">这一天 · Recap</h2>
+      <button
+        v-if="canRegenerate && recap.data.value && !recap.data.value.isEmpty"
+        class="glass-control cursor-pointer whitespace-nowrap px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-50"
+        :disabled="recap.pending.value || streaming"
+        title="用最新数据重新生成这一天的回顾"
+        @click="generate()"
+      >重新生成</button>
     </div>
-  </Card>
+
+    <!-- 首次读取中（无旧数据可展示时） -->
+    <div v-if="recap.pending.value && !recap.data.value" class="py-6 text-center text-[0.9rem] text-muted-foreground">
+      <span class="recap-thinking">正在回忆这一天…</span>
+    </div>
+
+    <!-- 读取出错（保留上次成功的叙事时不打断阅读，只在无数据时占位） -->
+    <div
+      v-else-if="errorMessage && !recap.data.value"
+      class="flex items-center justify-between gap-3 py-2 text-[0.85rem] text-muted-foreground"
+    >
+      <span>{{ errorMessage }}</span>
+      <button
+        class="glass-control shrink-0 cursor-pointer px-2.5 py-1 text-[0.75rem]"
+        :disabled="recap.pending.value"
+        @click="load()"
+      >重试</button>
+    </div>
+
+    <!-- 空日 -->
+    <div v-else-if="recap.data.value?.isEmpty" class="py-6 text-center text-[0.9rem] text-muted-foreground">
+      这一天没有记录。
+    </div>
+
+    <!-- 生成中但还没有首个 delta：思考期可能长达数分钟，推理透传把这段沉默变成进度 -->
+    <div v-else-if="streaming && !narrative" class="flex flex-col gap-3 py-4">
+      <div class="text-center text-[0.9rem] text-muted-foreground">
+        <span class="recap-thinking">{{ thinkingText ? '正在思考…' : '正在回忆这一天…' }}</span>
+      </div>
+      <!--
+        推理面板：min-h == max-h 是刻意的固定高度——推理是每秒几十字符地长，
+        让容器跟着内容长会把整张卡片顶得一直抖；固定一格 9rem 只在首个推理到达时占位一次。
+        recap-thinking-panel 同时是滚动行为的样式与测试锚点（见 style 块）。
+      -->
+      <div
+        v-if="thinkingText"
+        ref="thinkingPanel"
+        class="recap-thinking-panel min-h-[9rem] max-h-[9rem] overflow-y-auto whitespace-pre-wrap rounded-md border border-border/50 bg-muted/25 px-3 py-2 text-[0.78rem] leading-relaxed text-muted-foreground"
+        @scroll="onThinkingScroll"
+      >{{ thinkingText }}</div>
+    </div>
+
+    <!-- 有数据但没有叙事：从未生成，且此刻没有生成在途（生成失败后也落在这里） -->
+    <div
+      v-else-if="recap.data.value && !narrative"
+      class="flex items-center justify-between gap-3 py-2 text-[0.85rem] text-muted-foreground"
+    >
+      <span>{{ streamError || '这一天还没有回顾。' }}</span>
+      <button
+        v-if="canRegenerate"
+        class="glass-control shrink-0 cursor-pointer px-2.5 py-1 text-[0.75rem]"
+        :disabled="streaming"
+        @click="generate()"
+      >生成</button>
+    </div>
+
+    <!-- 叙事 -->
+    <template v-else-if="recap.data.value">
+      <div class="flex flex-col gap-2.5 text-[0.92rem] leading-relaxed text-foreground/90">
+        <p v-for="(p, i) in paragraphs" :key="i">{{ p }}</p>
+      </div>
+      <div class="flex items-center justify-between gap-3 text-[0.72rem] text-muted-foreground/80">
+        <span v-if="generatedAtStr">生成于 {{ generatedAtStr }}<template v-if="recap.data.value.model"> · {{ recap.data.value.model }}</template></span>
+        <span v-else>&nbsp;</span>
+        <span v-if="streaming" class="recap-thinking">正在生成…</span>
+        <span v-else-if="streamError">{{ streamError }}</span>
+        <span v-else-if="errorMessage">{{ errorMessage }}</span>
+      </div>
+
+      <!-- 纠正入口：owner-only。写知识，不是散文补丁 -->
+      <RecapCorrection v-if="canRegenerate" :calendar-context="calendarContext" :regenerate="regenerateForCorrection" />
+    </template>
+  </DashboardCard>
 </template>
 
 <style scoped>

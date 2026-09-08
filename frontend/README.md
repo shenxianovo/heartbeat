@@ -12,6 +12,19 @@ Hub-local 交互授权入口。
 - `src/knowledge/`、`src/teaching/`：Strand、Episode、Matcher 与确认流。
 - `src/components/`：展示组件。
 
+## 本地开发
+
+先按[开发指南](../docs/development.md)启动本地栈，再运行：
+
+```bash
+npm --prefix frontend run dev
+```
+
+打开 <http://localhost:3000>，Vite 将 `/api` 和 `/hub` 请求统一代理到本地栈
+`http://127.0.0.1:8080`，直接读取本地数据库与 Hub。前端保留热更新；后端改动需重新构建本地服务。
+需要历史数据时按[数据刷新 runbook](../docs/runbooks/refresh-local-data.md)导入。
+鉴权沿用本地栈的真实 Auth 配置。
+
 ## 验证与归属
 
 ```bash

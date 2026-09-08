@@ -13,12 +13,7 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
     props: {
       username: 'alice',
       isToday: true,
-      isAlive: false,
-      currentApp: null,
-      currentAppId: null,
-      currentAppKey: null,
       presences: [],
-      isAllDevices: true,
       ...overrides,
     },
     global: {
@@ -51,7 +46,6 @@ describe('CurrentAppPanel', () => {
 
   it('renders only online devices in the multi-device view', () => {
     const wrapper = mountPanel({
-      isAlive: true,
       presences: [
         {
           deviceId: 1,
@@ -93,10 +87,6 @@ describe('CurrentAppPanel', () => {
 
   it('shows the device name when exactly one device is online', () => {
     const wrapper = mountPanel({
-      isAlive: true,
-      currentApp: 'Visual Studio Code',
-      currentAppId: 1,
-      currentAppKey: 'vscode',
       presences: [{
         deviceId: 1,
         deviceName: 'MacBook Pro',

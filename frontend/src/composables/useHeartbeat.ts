@@ -1,10 +1,11 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import type { ApiError, AppInfoResponse, KeyFrequencyItem } from '../api/index'
+import type { ApiError, AppInfoResponse, KeyFrequencyItem, InputCountsResponse } from '../api/index'
 import {
   fetchAdminAppCatalog,
   fetchMe,
   fetchPublicApps,
   fetchPublicKeyFrequency,
+  fetchPublicInputCounts,
 } from '../api/index'
 import { loadAdminProvisionalAppIds } from '../appCatalog/adminOverlay'
 import { authStore } from '../stores/auth'
@@ -38,7 +39,7 @@ export function useHeartbeat(username: string) {
   const appsData = useAsyncData<AppInfoResponse[]>(() => fetchPublicApps(username), [])
   const apps = appsData.data
   const provisionalAppIds = ref<Set<number>>(new Set())
-  const loading = ref(false)
+  const loading = ref(true)
 
   const appNameMap = computed(() => {
     const map = new Map<number, string>()
@@ -49,18 +50,16 @@ export function useHeartbeat(username: string) {
   const status = useDeviceStatus(username, selection.devices, selectedDevice, isToday)
   const reports = useReports(username, selectedDevice, calendarContext, refreshIdentity)
 
-  const kf = useAsyncData<KeyFrequencyItem[]>(() => {
-    return fetchPublicKeyFrequency(username, {
-      deviceId: selectedDevice.value,
-      start: calendarContext.value.day.start,
-      end: calendarContext.value.day.endExclusive,
-    })
-  }, [])
+  const inputWindow = () => ({ deviceId: selectedDevice.value,
+    start: calendarContext.value.day.start, end: calendarContext.value.day.endExclusive })
+  const inputScope = () => [selectedDevice.value, calendarContext.value.day.start,
+    calendarContext.value.day.endExclusive, calendarContext.value.day.timeZone].join('|')
+  const kf = useAsyncData<KeyFrequencyItem[]>(() => fetchPublicKeyFrequency(username, inputWindow()), [], inputScope)
+  const counts = useAsyncData<InputCountsResponse | null>(() => fetchPublicInputCounts(username, inputWindow()), null, inputScope)
   const keyFrequency = kf.data
-  // 跨设备键频求和：打字就是打字,不存在"哪台机器的 W 键"的语义问题。
-  async function loadKeyFrequency() {
-    await runForCurrentIdentity(kf, () => refreshIdentity.value)
-  }
+  // 键盘与鼠标共享查询窗口，独立提交结果；一项失败不清空另一项。
+  const loadInput = () => Promise.all([kf, counts].map(source =>
+    runForCurrentIdentity(source, () => refreshIdentity.value)))
 
   async function loadAdminOverlay(commitIf: () => boolean = () => true) {
     try {
@@ -124,7 +123,7 @@ export function useHeartbeat(username: string) {
         status.load(isCurrent),
         reports.loadDaily(),
         reports.loadWeekly(),
-        loadKeyFrequency(),
+        loadInput(),
         loadAdminOverlay(isCurrent),
       ])
     } finally {
@@ -152,7 +151,7 @@ export function useHeartbeat(username: string) {
       reports.loadUsage()
       reports.loadDaily()
       reports.loadWeekly()
-      loadKeyFrequency()
+      loadInput()
     }, 30_000)
   })
 
@@ -175,9 +174,6 @@ export function useHeartbeat(username: string) {
     isAlive: status.isAlive,
     presences: status.presences,
     onlinePresences: status.onlinePresences,
-    currentApp: status.currentApp,
-    currentAppId: status.currentAppId,
-    currentAppKey: status.currentAppKey,
     lastSeenStr: status.lastSeenStr,
     lastSeenTitle: status.lastSeenTitle,
     isAllDevices: selection.isAllDevices,
@@ -194,6 +190,9 @@ export function useHeartbeat(username: string) {
     weeklyAwaySeconds: reports.weeklyAwaySeconds,
     includeAway: reports.includeAway,
     keyFrequency,
+    inputCounts: counts.data,
+    inputCountsLoading: counts.pending,
+    inputCountsFailed: computed(() => counts.error.value !== null),
     calendarContext,
     calendarValid,
     timezoneLabel,

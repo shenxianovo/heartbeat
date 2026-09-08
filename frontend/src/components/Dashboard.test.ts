@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchPublicDailyReport,
   fetchPublicKeyFrequency,
+  fetchPublicInputCounts,
   fetchPublicUsage,
   fetchPublicWeeklyReport,
 } from '../api/index'
@@ -52,6 +53,7 @@ vi.mock('../api/index', () => ({
   fetchPublicWeeklyReport: vi.fn(async () => ({ apps: [] })),
   fetchPublicUsage: vi.fn(async () => []),
   fetchPublicKeyFrequency: vi.fn(async () => []),
+  fetchPublicInputCounts: vi.fn(async () => ({ mouseLeft: 12, mouseRight: 2, mouseMiddle: 1, scrollUp: 3, scrollDown: 4 })),
   toApiError: vi.fn(() => ({ kind: 'parse' })),
 }))
 
@@ -91,6 +93,8 @@ describe('Dashboard Calendar Context orchestration', () => {
     })
     await flushPromises()
 
+    expect(wrapper.find('details').exists()).toBe(false)
+    expect(fetchPublicInputCounts).toHaveBeenCalled()
     expect(resolveCalendarContext).toHaveBeenCalledTimes(1)
     const context = wrapper.findComponent(RecapCard).props('calendarContext')
     expect(Object.isFrozen(context)).toBe(true)

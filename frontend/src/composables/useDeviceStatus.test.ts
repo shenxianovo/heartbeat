@@ -47,7 +47,7 @@ describe('useDeviceStatus refresh generation isolation', () => {
     resolveOld({ isOnline: true, currentApp: 'Old app' } as Status)
     await oldLoad
 
-    expect(status.currentApp.value).toBe('New app')
+    expect(status.onlinePresences.value[0]?.currentApp).toBe('New app')
     wrapper.unmount()
   })
 })

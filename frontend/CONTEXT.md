@@ -6,7 +6,7 @@ Dashboard 是回顾与管理入口，以展示为主；它也把用户确认的�
 ## Language
 
 **Dashboard**:
-主页面：状态卡、今日排行、周图表、时间轴、键盘热力图的组合。30s 轮询报表；`useHeartbeat` 是瘦协调器，组合设备选择 / 在场 / 报表三个数据域。
+主页面：状态卡、Subject 状态、Recap、当日排行、所在周图表、时间轴、键盘热力图与鼠标活动的组合。30s 轮询报表；`useHeartbeat` 是瘦协调器，组合设备选择 / 在场 / 报表三个数据域。
 
 **Local Calendar Window（本地日历窗口）**:
 Dashboard 对所选日期的解释：以当前浏览器 civil timezone 将日或周映射为 `[本地起点, 下一本地起点)` 的事实窗口，周一开周，夏令时切换日可以是 23 或 25 小时。同一窗口是 Report、Recap、Timeline 与 Asking 对“这天 / 这周”的共同含义。
@@ -43,3 +43,7 @@ ADR-014 的离开段在展示层的形态：特殊 App 标签（`AWAY_APP`），
 
 **Keyboard Heatmap（键盘热力图）**:
 InputEvent 的可视化：按键频次热力图。只消费聚合频次，不展示按键序列（原始序列等价于键盘记录，永不上屏）。
+
+**Mouse Activity（鼠标活动）**:
+InputEvent 的聚合计数：左、右、中键点击和向上、向下滚轮，按所选本地日历窗口与设备统计。
+_Avoid_: 鼠标移动距离、移动轨迹（未采集）

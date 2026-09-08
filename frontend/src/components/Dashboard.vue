@@ -10,6 +10,7 @@ import CurrentAppPanel from './CurrentAppPanel.vue'
 import TodayRanking from './TodayRanking.vue'
 import WeeklyChart from './WeeklyChart.vue'
 import KeyboardHeatmap from './KeyboardHeatmap.vue'
+import MouseActivity from './MouseActivity.vue'
 import AppDetailModal from './AppDetailModal.vue'
 import {
   Select,
@@ -40,9 +41,6 @@ const {
   isToday,
   isAlive,
   onlinePresences,
-  currentApp,
-  currentAppId,
-  currentAppKey,
   lastSeenStr,
   lastSeenTitle,
   isAllDevices,
@@ -50,13 +48,15 @@ const {
   totalSeconds,
   awaySeconds,
   onlineSeconds,
-  perDeviceSeconds,
   hasConcurrentUse,
   maxSeconds,
   weeklyAppSummaries,
   weeklyTotalSeconds,
   includeAway,
   keyFrequency,
+  inputCounts,
+  inputCountsLoading,
+  inputCountsFailed,
   calendarContext,
   calendarValid,
   timezoneLabel,
@@ -106,26 +106,12 @@ watch(() => calendarContext.value.day, (current) => {
 </script>
 
 <template>
-  <!-- pb-[50vh]：底部留出半屏可滚动空间，滚到底时露出左下角固定的看板娘背景 -->
+  <!-- 半屏留白让滚到底时可以完整看见固定在背景的吉祥物。 -->
   <div class="relative z-10 mx-auto w-[min(100%,1400px)] px-[clamp(0.75rem,3vw,2.5rem)] py-[clamp(1rem,3vw,2.5rem)] pb-[50vh]">
     <header class="mb-[clamp(1.25rem,3vw,2rem)] flex flex-wrap items-center justify-between gap-x-4 gap-y-3 pr-12 max-[640px]:flex-col max-[640px]:items-stretch max-[640px]:pr-0">
       <div class="flex min-w-0 select-none flex-wrap items-center gap-x-3 gap-y-1.5 font-display text-[clamp(1.15rem,2.5vw,1.5rem)] font-bold tracking-tight max-[640px]:pr-12">
-        <span class="status-dot" :class="{ alive: isAlive }"></span>
+        <span class="status-dot" :class="{ alive: isToday && isAlive }"></span>
         <span class="whitespace-nowrap">{{ username }}</span>
-
-        <!-- per-device 在场芯片：双机并发时"当前应用"不是一个值,逐台展示而非合成 -->
-        <span v-if="isToday && onlinePresences.length > 1" class="flex flex-wrap items-center gap-1.5">
-          <span
-            v-for="p in onlinePresences"
-            :key="p.deviceId"
-            class="glass-control flex items-center gap-1.5 px-2 py-0.5 font-sans text-[0.7rem] font-normal text-foreground"
-            :title="`${p.deviceName} 在线${p.currentApp ? ' · ' + p.currentApp : ''}`"
-          >
-            <span class="status-dot !h-1.5 !w-1.5" :class="{ alive: p.isOnline }"></span>
-            <span class="max-w-[7rem] truncate">{{ p.deviceName }}</span>
-            <span v-if="p.isOnline && p.currentApp" class="max-w-[7rem] truncate text-muted-foreground">{{ p.currentApp }}</span>
-          </span>
-        </span>
       </div>
 
       <div class="flex flex-wrap items-center gap-2 max-[640px]:w-full">
@@ -181,28 +167,30 @@ watch(() => calendarContext.value.day, (current) => {
 
     <div
       v-if="errorMessage"
-      class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm text-red-200"
+      role="alert"
+      class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm text-destructive"
     >
       <span>{{ errorMessage }}</span>
       <button
-        class="glass-control shrink-0 cursor-pointer px-3 py-1 text-[0.8rem] font-medium text-red-100 transition-colors hover:text-white"
+        class="glass-control shrink-0 cursor-pointer px-3 py-1 text-[0.8rem] font-medium text-destructive transition-colors"
         :disabled="loading"
         @click="refresh()"
       >重试</button>
     </div>
 
-    <main v-if="calendarValid">
+    <main v-if="calendarValid" :aria-busy="loading">
       <StatusCards
         :username="username"
         :isToday="isToday"
         :isAlive="isAlive"
         :lastSeenStr="lastSeenStr"
         :lastSeenTitle="lastSeenTitle"
+        :loading="loading"
+        :failed="!!error"
         :appSummaries="appSummaries"
         :totalSeconds="totalSeconds"
         :awaySeconds="awaySeconds"
         :onlineSeconds="onlineSeconds"
-        :perDeviceSeconds="perDeviceSeconds"
         :hasConcurrentUse="hasConcurrentUse"
         :isAllDevices="isAllDevices"
         :includeAway="includeAway"
@@ -213,12 +201,7 @@ watch(() => calendarContext.value.day, (current) => {
           <CurrentAppPanel
             :username="username"
             :isToday="isToday"
-            :isAlive="isAlive"
-            :currentApp="currentApp"
-            :currentAppId="currentAppId"
-            :currentAppKey="currentAppKey"
             :presences="onlinePresences"
-            :isAllDevices="isAllDevices"
           />
 
           <!-- owner 可生成/重生成；公开访客只读已有缓存，不触发 LLM。 -->
@@ -235,6 +218,8 @@ watch(() => calendarContext.value.day, (current) => {
           />
 
           <ActivityTimeline
+            :key="selectedDevice"
+            :loading="loading"
             :username="username"
             :usageData="usageData"
             :appNameMap="appNameMap"
@@ -244,11 +229,13 @@ watch(() => calendarContext.value.day, (current) => {
             :isAllDevices="isAllDevices"
           />
 
-          <KeyboardHeatmap :keyFrequency="keyFrequency" />
+          <KeyboardHeatmap :keyFrequency="keyFrequency" :loading="loading" />
+          <MouseActivity :counts="inputCounts" :loading="inputCountsLoading" :failed="inputCountsFailed" @retry="refresh()" />
         </div>
 
         <div class="min-w-0 min-[900px]:sticky min-[900px]:top-4">
           <TodayRanking
+            :loading="loading"
             :username="username"
             :appSummaries="appSummaries"
             :maxSeconds="maxSeconds"
@@ -257,6 +244,7 @@ watch(() => calendarContext.value.day, (current) => {
           />
 
           <WeeklyChart
+            :loading="loading"
             :username="username"
             :weeklyAppSummaries="weeklyAppSummaries"
             :weeklyTotalSeconds="weeklyTotalSeconds"

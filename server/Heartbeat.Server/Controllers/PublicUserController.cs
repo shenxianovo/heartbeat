@@ -170,6 +170,20 @@ namespace Heartbeat.Server.Controllers
             return status;
         }
 
+        [HttpGet("input-events/counts")]
+        [EndpointName("getUserInputCounts")]
+        public async Task<ActionResult<InputCountsResponse>> GetInputCounts(
+            string username,
+            [FromQuery] long? deviceId,
+            [FromQuery] DateTimeOffset? start,
+            [FromQuery] DateTimeOffset? end)
+        {
+            var user = await ResolveVisibleAsync(username);
+            if (user == null) return NotFound();
+
+            return await inputEventService.GetCountsAsync(user.Id, deviceId, start, end);
+        }
+
         [HttpGet("input-events/key-frequency")]
         [EndpointName("getUserKeyFrequency")]
         public async Task<ActionResult<KeyFrequencyResponse>> GetKeyFrequency(

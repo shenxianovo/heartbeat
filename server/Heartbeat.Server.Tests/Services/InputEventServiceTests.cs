@@ -1,5 +1,9 @@
 using Heartbeat.Core.DTOs.Input;
 using Heartbeat.Server.Data;
+using Heartbeat.Server.Controllers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using Heartbeat.Server.Entities;
 using Heartbeat.Server.Services;
 using Heartbeat.Server.Tests.Fixtures;
@@ -135,6 +139,31 @@ public class InputEventServiceTests(PostgresContainerFixture fixture) : Postgres
         await svc.SaveAsync(_deviceId, new InputEventUploadRequest { Events = [] });
 
         Assert.Equal(0, await db.InputEvents.CountAsync());
+    }
+
+    [Theory]
+    [InlineData(true, null, true)]
+    [InlineData(false, null, false)]
+    [InlineData(false, "other-user", false)]
+    [InlineData(false, "user-1", true)]
+    public async Task PublicCounts_RespectsVisibilityAndHalfOpenWindow(bool isPublic, string? viewer, bool visible)
+    {
+        using var db = CreateDbContext();
+        db.Users.Add(new User { Id = "user-1", Username = "alice", IsPublic = isPublic });
+        await db.SaveChangesAsync();
+        var start = DateTimeOffset.UtcNow.AddHours(-1);
+        var end = start.AddMinutes(30);
+        var service = new InputEventService(db);
+        await service.SaveAsync(_deviceId, new InputEventUploadRequest { Events = [
+            Item(InputEventType.MouseButton, 1, start), Item(InputEventType.MouseButton, 1, end),
+        ] });
+        var context = new DefaultHttpContext();
+        if (viewer != null) context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", viewer)]));
+        var controller = new PublicUserController(new UserService(db), null!, null!, null!, null!, service, null!,
+            new CurrentUserService(new HttpContextAccessor { HttpContext = context }));
+        var result = await controller.GetInputCounts("alice", _deviceId, start, end);
+        if (visible) Assert.Equal(1, result.Value!.MouseLeft);
+        else Assert.IsType<NotFoundResult>(result.Result);
     }
 
     [Fact]

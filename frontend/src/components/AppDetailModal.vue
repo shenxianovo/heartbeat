@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, watch, onMounted, onUnmounted } from 'vue'
+import { computed, watch } from 'vue'
+import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogClose } from 'reka-ui'
 import { fetchPublicSegments } from '../api/index'
 import type { AppUsageResponse, SegmentResponse, DeviceInfoResponse } from '../api/index'
 import type { CalendarContext } from '../calendar/localCalendarWindow'
@@ -9,7 +10,7 @@ import { formatDuration } from '../composables/useHeartbeat'
 import { formatTitle } from '../titleFormatters'
 import { upgradeBreakdown } from '../labelUpgrade'
 import { toPluginSegs, toSystemSegs, toReplaySegs } from '../segmentAdapters'
-import { envelope, buildTracks, type Track } from '../timeline/replayModel'
+import { envelope, buildTracks } from '../timeline/replayModel'
 import type { Interval } from '../timeline/timelineModel'
 import { niceTicks } from '../timeline/timeScale'
 import { X } from 'lucide-vue-next'
@@ -40,7 +41,7 @@ const segs = useAsyncData<SegmentResponse[]>(() => {
     start: dayWindow.value.start,
     end: dayWindow.value.endExclusive,
   })
-}, [])
+}, [], () => [props.deviceId, props.app.appId, dayWindow.value.start, dayWindow.value.endExclusive].join('|'))
 const pluginSegments = segs.data
 const loading = segs.pending
 const segmentsFailed = computed(() => segs.error.value !== null)
@@ -80,50 +81,22 @@ const viewBounds = computed(() => {
   return end > start ? { start, end } : null
 })
 
-// system 主轨在前，插件轨按通用 attributes.laneKey 分 lane。
-const tracks = computed<Track[]>(() => {
-  const vb = viewBounds.value
-  if (!vb) return []
-  return buildTracks(
-    toReplaySegs(systemSegments.value, pluginSegments.value, dayBounds.value),
-    vb,
-    dayWindow.value.timeZone,
-  )
-})
-
-/**
- * 设备分组回放：聚合视图（deviceId=0）下同一 App 可能在多台设备上并行,
- * 设备是最外层分组键,组内仍是 system 主轨 + 插件轨。共享同一时间视窗以便横向对比。
- */
+// 单设备和多设备使用同一套分组、轨道渲染；只有多组时显示设备名。
 const deviceGroups = computed(() => {
   const vb = viewBounds.value
-  if (!vb || props.deviceId !== 0) return []
-
-  const ids = new Set<number>()
-  for (const u of systemSegments.value) ids.add(u.deviceId ?? 0)
-  for (const s of pluginSegments.value) ids.add(s.deviceId ?? 0)
-  if (ids.size <= 1) return []   // 单台活跃 → 退化为普通单设备回放
-
-  const groups: { deviceId: number; deviceName: string; tracks: Track[] }[] = []
-  for (const id of [...ids].sort((a, b) => a - b)) {
-    const sys = systemSegments.value.filter(u => (u.deviceId ?? 0) === id)
-    const plugins = pluginSegments.value.filter(s => (s.deviceId ?? 0) === id)
-    const t = buildTracks(
-      toReplaySegs(sys, plugins, dayBounds.value),
-      vb,
-      dayWindow.value.timeZone,
-    )
-    if (t.length === 0) continue
-    groups.push({
-      deviceId: id,
-      deviceName: props.devices.find(d => d.id === id)?.name ?? `设备 ${id}`,
-      tracks: t,
-    })
-  }
-  return groups
+  if (!vb) return []
+  const ids = new Set([...systemSegments.value, ...pluginSegments.value].map(s => s.deviceId ?? 0))
+  const grouped = props.deviceId === 0 && ids.size > 1
+  return (grouped ? [...ids].sort((a, b) => a - b) : [props.deviceId]).map(id => ({
+    deviceId: id,
+    deviceName: props.devices.find(d => d.id === id)?.name ?? `设备 ${id}`,
+    tracks: buildTracks(toReplaySegs(
+      grouped ? systemSegments.value.filter(s => (s.deviceId ?? 0) === id) : systemSegments.value,
+      grouped ? pluginSegments.value.filter(s => (s.deviceId ?? 0) === id) : pluginSegments.value,
+      dayBounds.value,
+    ), vb, dayWindow.value.timeZone),
+  })).filter(g => g.tracks.length)
 })
-
-const showDeviceGroups = computed(() => deviceGroups.value.length > 1)
 
 // ── 标题明细（ADR-019 标签升级）──
 // system 段有重叠插件段时标签升级为页面标题/URL，无覆盖的时间窗口 fallback 到窗口标题。
@@ -141,27 +114,19 @@ const timeTicks = computed(() => {
   return vb ? niceTicks(vb.start, vb.end, 10, dayWindow.value.timeZone) : []
 })
 
-// ── 全局弹窗行为:Esc 关闭 + 锁背景滚动 ──
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
-}
-onMounted(() => {
-  document.addEventListener('keydown', onKeydown)
-  document.body.style.overflow = 'hidden'
-})
-onUnmounted(() => {
-  document.removeEventListener('keydown', onKeydown)
-  document.body.style.overflow = ''
-})
+// 排行入口在 DialogRoot 外，关闭后回到打开详情的按钮。
+const returnFocus = document.activeElement as HTMLElement | null
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm min-[640px]:p-8"
-      @click.self="emit('close')"
-    >
-      <div class="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+  <DialogRoot :open="true" @update:open="!$event && emit('close')">
+    <DialogPortal>
+      <DialogOverlay class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
+      <DialogContent
+        :aria-describedby="undefined"
+        class="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-4xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+        @close-auto-focus.prevent="returnFocus?.focus()"
+      >
         <!-- Header -->
         <div class="flex items-center gap-3 border-b border-border px-5 py-4">
           <AppIcon
@@ -169,25 +134,25 @@ onUnmounted(() => {
             :app-id="app.appId"
             class="h-7 w-7 rounded object-contain"
           />
-          <span class="truncate text-base font-semibold">{{ app.appName }}</span>
+          <DialogTitle class="truncate text-base font-semibold">{{ app.appName }}</DialogTitle>
           <span
             v-if="isProvisional"
             class="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[0.65rem] text-amber-200"
           >待归类</span>
           <span class="font-mono text-sm text-muted-foreground">{{ formatDuration(app.totalSeconds) }}</span>
-          <button
+          <DialogClose
+            aria-label="关闭应用详情"
             class="ml-auto flex cursor-pointer items-center justify-center rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            @click="emit('close')"
           >
             <X :size="18" />
-          </button>
+          </DialogClose>
         </div>
 
         <div class="flex flex-col gap-5 overflow-y-auto px-5 py-4">
           <!-- 多轨回放 -->
           <section>
             <h3 class="mb-2 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">回放</h3>
-            <div v-if="tracks.length && viewBounds" class="overflow-hidden rounded-md border border-border bg-secondary">
+            <div v-if="deviceGroups.length && viewBounds" class="overflow-hidden rounded-md border border-border bg-secondary">
               <!-- 刻度行 -->
               <div class="flex h-6 border-b border-border bg-muted">
                 <div class="w-[80px] shrink-0 border-r border-border"></div>
@@ -201,9 +166,8 @@ onUnmounted(() => {
                 </div>
               </div>
               <!-- 设备分组回放:聚合视图下同一 App 在多台设备并行时,设备为最外层分组 -->
-              <template v-if="showDeviceGroups">
-                <div v-for="g in deviceGroups" :key="g.deviceId">
-                  <div class="flex h-6 items-center border-b border-border bg-muted/95 px-2">
+              <div v-for="g in deviceGroups" :key="g.deviceId">
+                  <div v-if="deviceGroups.length > 1" class="flex h-6 items-center border-b border-border bg-muted/95 px-2">
                     <span class="truncate text-[0.7rem] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                       {{ g.deviceName }}
                     </span>
@@ -240,43 +204,6 @@ onUnmounted(() => {
                       </div>
                     </div>
                   </div>
-                </div>
-              </template>
-
-              <!-- 轨道行:system 主轨在前,插件轨挂在下方;轨内按副本分 lane（如浏览器窗口） -->
-              <div
-                v-for="track in showDeviceGroups ? [] : tracks"
-                :key="track.source"
-                class="flex border-b border-border last:border-b-0"
-              >
-                <div class="flex w-[80px] shrink-0 items-center border-r border-border bg-muted px-2">
-                  <span class="truncate font-mono text-[0.7rem] text-muted-foreground">{{ track.source }}</span>
-                </div>
-                <div class="flex-1">
-                  <div
-                    v-for="(lane, li) in track.lanes"
-                    :key="li"
-                    class="relative h-9 border-b border-dashed border-border/50 last:border-b-0"
-                  >
-                    <template v-for="(bar, i) in lane.bars" :key="i">
-                      <!-- 点事件:菱形标记 -->
-                      <div
-                        v-if="bar.isPoint"
-                        class="absolute top-1/2 z-[1] h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-pointer bg-accent-3 hover:z-[2] hover:scale-125"
-                        :style="{ left: bar.left + '%' }"
-                        :title="bar.tooltip"
-                      ></div>
-                      <!-- 段:横条 -->
-                      <div
-                        v-else
-                        class="absolute top-2 h-5 cursor-pointer rounded-sm opacity-80 hover:z-[2] hover:opacity-100"
-                        :class="track.source === 'system' ? 'bg-primary' : 'bg-accent-3'"
-                        :style="{ left: bar.left + '%', width: bar.width + '%' }"
-                        :title="bar.tooltip"
-                      ></div>
-                    </template>
-                  </div>
-                </div>
               </div>
             </div>
             <div v-else class="rounded-md border border-border bg-secondary py-6 text-center text-[0.8rem] text-muted-foreground">
@@ -315,7 +242,7 @@ onUnmounted(() => {
             </div>
           </section>
         </div>
-      </div>
-    </div>
-  </Teleport>
+      </DialogContent>
+    </DialogPortal>
+  </DialogRoot>
 </template>

@@ -11,6 +11,7 @@ import {
   fetchPublicApps,
   fetchPublicDailyReport,
   fetchPublicKeyFrequency,
+  fetchPublicInputCounts,
   fetchPublicUsage,
   fetchPublicWeeklyReport,
 } from '../api/index'
@@ -90,6 +91,7 @@ vi.mock('../api/index', () => ({
   fetchPublicWeeklyReport: vi.fn(async () => ({ apps: [] })),
   fetchPublicUsage: vi.fn(async () => []),
   fetchPublicKeyFrequency: vi.fn(async () => []),
+  fetchPublicInputCounts: vi.fn(async () => ({ mouseLeft: 12, mouseRight: 2, mouseMiddle: 1, scrollUp: 3, scrollDown: 4 })),
   toApiError: vi.fn(() => ({ kind: 'parse' })),
 }))
 
@@ -129,6 +131,7 @@ describe('useHeartbeat activity view Calendar Context', () => {
       start: day.start,
       end: day.endExclusive,
     })
+    expect(fetchPublicInputCounts).toHaveBeenLastCalledWith('alice', expect.objectContaining({ deviceId: 0, start: heartbeat.calendarContext.value.day.start, end: heartbeat.calendarContext.value.day.endExclusive }))
     expect(fetchPublicKeyFrequency).toHaveBeenLastCalledWith('alice', {
       deviceId: 0,
       start: day.start,

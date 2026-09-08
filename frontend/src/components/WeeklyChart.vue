@@ -2,9 +2,10 @@
 import { ref, computed } from 'vue'
 import { formatDuration } from '../composables/useHeartbeat'
 import AppIcon from './AppIcon.vue'
-import { Card } from '@/components/ui/card'
+import DashboardCard from './DashboardCard.vue'
 
 const props = defineProps<{
+  loading?: boolean
   username: string
   weeklyAppSummaries: { appId: number; appName: string; totalSeconds: number }[]
   weeklyTotalSeconds: number
@@ -52,79 +53,77 @@ const donutSegments = computed(() => {
 </script>
 
 <template>
-  <Card class="mb-6 gap-3 border-border/60 bg-card/80 py-5 backdrop-blur-sm">
-    <div class="flex flex-col gap-3 px-5">
-      <h2 class="text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">本周应用使用</h2>
+  <DashboardCard>
+    <h2 class="text-sm font-semibold text-foreground">所在周应用使用</h2>
 
-      <div
-        v-if="donutSegments.length"
-        class="flex items-center gap-8 max-[640px]:flex-col min-[900px]:flex-col min-[900px]:items-center"
-      >
-        <!-- Donut -->
-        <div class="relative h-[200px] w-[200px] shrink-0 min-[900px]:h-[170px] min-[900px]:w-[170px] min-[1200px]:h-[190px] min-[1200px]:w-[190px]">
-          <svg viewBox="0 0 200 200" class="h-full w-full overflow-visible">
-            <circle cx="100" cy="100" r="70" fill="none" stroke="var(--secondary)" stroke-width="30" />
-            <circle
-              v-for="(seg, i) in donutSegments"
-              :key="i"
-              cx="100" cy="100" r="70"
-              fill="none"
-              :stroke="seg.color"
-              :stroke-width="hoveredSegment === i ? 35 : 30"
-              :stroke-dasharray="`${seg.length} ${CIRCUMFERENCE - seg.length}`"
-              :stroke-dashoffset="`${-seg.offset}`"
-              transform="rotate(-90 100 100)"
-              class="donut-segment"
-              @mouseenter="hoveredSegment = i"
-              @mouseleave="hoveredSegment = null"
-            />
-          </svg>
-          <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-            <template v-if="hoveredSegment !== null">
-              <AppIcon
-                :username="username"
-                :app-id="donutSegments[hoveredSegment].appId"
-                class="mb-1 h-6 w-6 object-contain"
-              />
-              <span class="max-w-[100px] truncate text-center text-[0.8rem] font-semibold text-foreground">
-                {{ donutSegments[hoveredSegment].appName }}
-              </span>
-              <span class="font-mono text-base font-bold text-foreground">{{ formatDuration(donutSegments[hoveredSegment].totalSeconds) }}</span>
-              <span class="text-xs text-muted-foreground">{{ donutSegments[hoveredSegment].percentage }}%</span>
-            </template>
-            <template v-else>
-              <span class="text-[0.8rem] font-semibold text-foreground">本周总计</span>
-              <span class="font-mono text-base font-bold text-foreground">{{ formatDuration(weeklyTotalSeconds) }}</span>
-            </template>
-          </div>
-        </div>
-
-        <!-- Legend -->
-        <div class="flex max-h-[200px] flex-1 flex-col gap-2 overflow-y-auto pr-1 min-[900px]:max-h-[170px] min-[900px]:w-full min-[1200px]:max-h-[200px]">
-          <div
+    <div
+      v-if="donutSegments.length"
+      class="flex items-center gap-8 max-[640px]:flex-col min-[900px]:flex-col min-[900px]:items-center"
+    >
+      <!-- Donut -->
+      <div class="relative h-[200px] w-[200px] shrink-0 min-[900px]:h-[170px] min-[900px]:w-[170px] min-[1200px]:h-[190px] min-[1200px]:w-[190px]">
+        <svg viewBox="0 0 200 200" class="h-full w-full overflow-visible">
+          <circle cx="100" cy="100" r="70" fill="none" stroke="var(--secondary)" stroke-width="30" />
+          <circle
             v-for="(seg, i) in donutSegments"
-            :key="seg.appName"
-            class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-[0.8rem] transition-[background,opacity] duration-200 hover:bg-accent"
-            :class="{ 'opacity-30': hoveredSegment !== null && hoveredSegment !== i }"
+            :key="i"
+            cx="100" cy="100" r="70"
+            fill="none"
+            :stroke="seg.color"
+            :stroke-width="hoveredSegment === i ? 35 : 30"
+            :stroke-dasharray="`${seg.length} ${CIRCUMFERENCE - seg.length}`"
+            :stroke-dashoffset="`${-seg.offset}`"
+            transform="rotate(-90 100 100)"
+            class="donut-segment"
             @mouseenter="hoveredSegment = i"
             @mouseleave="hoveredSegment = null"
-          >
-            <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: seg.color }"></span>
+          />
+        </svg>
+        <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <template v-if="hoveredSegment !== null">
             <AppIcon
               :username="username"
-              :app-id="seg.appId"
-              class="h-4 w-4 shrink-0 object-contain"
+              :app-id="donutSegments[hoveredSegment].appId"
+              class="mb-1 h-6 w-6 object-contain"
             />
-            <span class="flex-1 truncate">{{ seg.appName }}</span>
-            <span class="font-mono text-muted-foreground">{{ formatDuration(seg.totalSeconds) }}</span>
-            <span class="w-12 text-right text-muted-foreground">{{ seg.percentage }}%</span>
-          </div>
+            <span class="max-w-[100px] truncate text-center text-[0.8rem] font-semibold text-foreground">
+              {{ donutSegments[hoveredSegment].appName }}
+            </span>
+            <span class="font-mono text-base font-bold text-foreground">{{ formatDuration(donutSegments[hoveredSegment].totalSeconds) }}</span>
+            <span class="text-xs text-muted-foreground">{{ donutSegments[hoveredSegment].percentage }}%</span>
+          </template>
+          <template v-else>
+            <span class="text-[0.8rem] font-semibold text-foreground">该周总计</span>
+            <span class="font-mono text-base font-bold text-foreground">{{ formatDuration(weeklyTotalSeconds) }}</span>
+          </template>
         </div>
       </div>
 
-      <div v-else class="py-8 text-center text-[0.9rem] text-muted-foreground">暂无数据</div>
+      <!-- Legend -->
+      <div class="flex max-h-[200px] flex-1 flex-col gap-2 overflow-y-auto pr-1 min-[900px]:max-h-[170px] min-[900px]:w-full min-[1200px]:max-h-[200px]">
+        <div
+          v-for="(seg, i) in donutSegments"
+          :key="seg.appName"
+          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-[0.8rem] transition-[background,opacity] duration-200 hover:bg-accent"
+          :class="{ 'opacity-30': hoveredSegment !== null && hoveredSegment !== i }"
+          @mouseenter="hoveredSegment = i"
+          @mouseleave="hoveredSegment = null"
+        >
+          <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: seg.color }"></span>
+          <AppIcon
+            :username="username"
+            :app-id="seg.appId"
+            class="h-4 w-4 shrink-0 object-contain"
+          />
+          <span class="flex-1 truncate">{{ seg.appName }}</span>
+          <span class="font-mono text-muted-foreground">{{ formatDuration(seg.totalSeconds) }}</span>
+          <span class="w-12 text-right text-muted-foreground">{{ seg.percentage }}%</span>
+        </div>
+      </div>
     </div>
-  </Card>
+
+    <div v-else class="py-8 text-center text-[0.9rem] text-muted-foreground">{{ loading ? '正在读取周统计…' : '该周暂无应用记录' }}</div>
+  </DashboardCard>
 </template>
 
 <style scoped>

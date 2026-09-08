@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { Card } from '@/components/ui/card'
+import DashboardCard from './DashboardCard.vue'
 import { KEYBOARD_ROWS } from '@/keyboard/keyPositions'
 
 const props = defineProps<{
+  loading?: boolean
   keyFrequency: { code: number; count: number }[]
 }>()
 
@@ -104,47 +105,45 @@ watch(funFacts, (facts) => {
 </script>
 
 <template>
-  <Card class="mb-6 gap-3 border-border/60 bg-card/80 py-5 backdrop-blur-sm">
-    <div class="flex flex-col gap-3 px-5">
-      <div class="flex items-baseline justify-between">
-        <h2 class="text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">键盘热力图</h2>
-        <span class="font-mono text-[0.75rem] text-muted-foreground">
-          <template v-if="hovered">{{ hovered.label }} · {{ hovered.count.toLocaleString() }} 次</template>
-          <template v-else>共 {{ totalCount.toLocaleString() }} 次按键</template>
-        </span>
-      </div>
+  <DashboardCard>
+    <div class="flex items-baseline justify-between">
+      <h2 class="text-sm font-semibold text-foreground">键盘热力图</h2>
+      <span class="font-mono text-[0.75rem] text-muted-foreground">
+        <template v-if="hovered">{{ hovered.label }} · {{ hovered.count.toLocaleString() }} 次</template>
+        <template v-else>共 {{ totalCount.toLocaleString() }} 次按键</template>
+      </span>
+    </div>
 
-      <div v-if="totalCount > 0" class="flex flex-col gap-1.5 overflow-x-auto">
+    <div v-if="totalCount > 0" class="flex flex-col gap-1.5 overflow-x-auto">
+      <div
+        v-for="(row, ri) in KEYBOARD_ROWS"
+        :key="ri"
+        class="flex gap-1.5"
+      >
         <div
-          v-for="(row, ri) in KEYBOARD_ROWS"
-          :key="ri"
-          class="flex gap-1.5"
+          v-for="(key, ki) in row"
+          :key="ki"
+          class="relative flex h-9 min-w-0 shrink-0 items-center justify-center rounded-md border border-border/50 bg-secondary/40 text-[0.7rem] font-medium text-foreground/80 transition-colors"
+          :style="{ flexGrow: key.w ?? 1, flexBasis: `${(key.w ?? 1) * 2.2}rem`, ...intensityStyle(key.code) }"
+          @mouseenter="hovered = { label: key.label, code: key.code, count: countFor(key.code) }"
+          @mouseleave="hovered = null"
         >
-          <div
-            v-for="(key, ki) in row"
-            :key="ki"
-            class="relative flex h-9 min-w-0 shrink-0 items-center justify-center rounded-md border border-border/50 bg-secondary/40 text-[0.7rem] font-medium text-foreground/80 transition-colors"
-            :style="{ flexGrow: key.w ?? 1, flexBasis: `${(key.w ?? 1) * 2.2}rem`, ...intensityStyle(key.code) }"
-            @mouseenter="hovered = { label: key.label, code: key.code, count: countFor(key.code) }"
-            @mouseleave="hovered = null"
-          >
-            {{ key.label }}
-          </div>
+          {{ key.label }}
         </div>
       </div>
-
-      <button
-        v-if="currentFact"
-        type="button"
-        class="group flex items-center gap-2 self-start rounded-full border border-border/50 bg-secondary/30 px-3 py-1.5 text-left text-[0.8rem] text-foreground/80 transition-colors hover:bg-accent"
-        title="点击切换"
-        @click="nextFact"
-      >
-        <span>{{ currentFact.text }}</span>
-        <span class="font-mono text-[0.65rem] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">↻</span>
-      </button>
-
-      <div v-else-if="totalCount === 0" class="py-8 text-center text-[0.9rem] text-muted-foreground">暂无数据</div>
     </div>
-  </Card>
+
+    <button
+      v-if="currentFact"
+      type="button"
+      class="group flex items-center gap-2 self-start rounded-full border border-border/50 bg-secondary/30 px-3 py-1.5 text-left text-[0.8rem] text-foreground/80 transition-colors hover:bg-accent"
+      title="点击切换"
+      @click="nextFact"
+    >
+      <span>{{ currentFact.text }}</span>
+      <span class="font-mono text-[0.65rem] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">↻</span>
+    </button>
+
+    <div v-else-if="totalCount === 0" class="py-8 text-center text-[0.9rem] text-muted-foreground">{{ loading ? '正在读取按键统计…' : '当日暂无按键记录' }}</div>
+  </DashboardCard>
 </template>

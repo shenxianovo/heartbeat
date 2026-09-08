@@ -52,6 +52,8 @@ export function useReports(
   calendarContext: Ref<CalendarContext>,
   refreshIdentity: Ref<string> = computed(() => calendarContext.value.correlationIdentity),
 ) {
+  const queryScope = () => [selectedDevice.value, calendarContext.value.day.start,
+    calendarContext.value.day.endExclusive, calendarContext.value.day.timeZone].join('|')
   const dayBounds = computed(() => ({
     start: Date.parse(calendarContext.value.day.start),
     end: Date.parse(calendarContext.value.day.endExclusive),
@@ -67,21 +69,21 @@ export function useReports(
 
   const usage = useAsyncData<AppUsageResponse[]>(
     () => fetchPublicUsage(username, { deviceId: selectedDevice.value, ...usageWindow() }),
-    [],
+    [], queryScope,
   )
   const daily = useAsyncData<DailyReportResponse | null>(
     () => fetchPublicDailyReport(username, {
       deviceId: selectedDevice.value,
       window: calendarContext.value.day,
     }),
-    null,
+    null, queryScope,
   )
   const weekly = useAsyncData<WeeklyReportResponse | null>(
     () => fetchPublicWeeklyReport(username, {
       deviceId: selectedDevice.value,
       window: calendarContext.value.week,
     }),
-    null,
+    null, queryScope,
   )
 
   const usageData = usage.data

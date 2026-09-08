@@ -209,7 +209,7 @@ const client = new Client(BASE_URL, authHttp)
 
 // Re-export generated types
 export type { AppInfoResponse, DeviceInfoResponse, DeviceStatusResponse, AppUsageResponse, DailyRecapResponse, DailyReportResponse, WeeklyReportResponse, SegmentResponse }
-export type { AppDurationItem } from './client'
+export type { AppDurationItem, InputCountsResponse } from './client'
 
 export interface AppSummary {
   appId: number
@@ -846,4 +846,9 @@ export async function fetchPublicKeyFrequency(username: string, params: {
     params.end ? new Date(params.end) : undefined,
   )
   return normalizeKeyFrequency(res)
+}
+
+export function fetchPublicInputCounts(username: string, params: { deviceId?: number; start?: string; end?: string }) {
+  return client.getUserInputCounts(username, deviceScope(params.deviceId),
+    params.start ? new Date(params.start) : undefined, params.end ? new Date(params.end) : undefined)
 }

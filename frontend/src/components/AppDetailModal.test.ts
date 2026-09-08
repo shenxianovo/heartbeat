@@ -59,6 +59,7 @@ describe('AppDetailModal Local Calendar Window adapter', () => {
         isProvisional: false,
       },
       global: {
+        renderStubDefaultSlot: true,
         stubs: { Teleport: true, AppIcon: true },
       },
     })
@@ -98,6 +99,7 @@ describe('AppDetailModal Local Calendar Window adapter', () => {
         isProvisional: false,
       },
       global: {
+        renderStubDefaultSlot: true,
         stubs: { Teleport: true, AppIcon: true },
       },
     })
@@ -138,6 +140,7 @@ describe('AppDetailModal Local Calendar Window adapter', () => {
         isProvisional: false,
       },
       global: {
+        renderStubDefaultSlot: true,
         stubs: { Teleport: true, AppIcon: true },
       },
     })
@@ -175,6 +178,7 @@ describe('AppDetailModal Local Calendar Window adapter', () => {
         isProvisional: false,
       },
       global: {
+        renderStubDefaultSlot: true,
         stubs: { Teleport: true, AppIcon: true },
       },
     })
@@ -202,4 +206,39 @@ describe('AppDetailModal Local Calendar Window adapter', () => {
     expect(wrapper.text()).toContain('New page')
     expect(wrapper.text()).not.toContain('Old page')
   })
+})
+
+it('exposes an accessible dialog with a named close action', async () => {
+  const { mount } = await import('@vue/test-utils')
+  const wrapper = mount(AppDetailModal, {
+    attachTo: document.body,
+    props: { username: 'alice', deviceId: 0, calendarContext: springContext, app: { appId: 7, appName: 'Code', totalSeconds: 120 }, usageData: [], devices: [], isProvisional: false },
+    global: { stubs: { AppIcon: true } },
+  })
+  await flushPromises()
+  const dialog = document.querySelector('[role="dialog"]')
+  expect(dialog).not.toBeNull()
+  expect(document.getElementById(dialog!.getAttribute('aria-labelledby')!)?.textContent).toBe('Code')
+  expect(dialog!.querySelector('button[aria-label="关闭应用详情"]')).not.toBeNull()
+  wrapper.unmount()
+})
+
+it('keeps concurrent device tracks separate when using the shared replay template', async () => {
+  vi.mocked(fetchPublicSegments).mockResolvedValueOnce([])
+  const wrapper = shallowMount(AppDetailModal, {
+    props: {
+      username: 'alice', deviceId: 0, calendarContext: springContext,
+      app: { appId: 7, appName: 'Code', totalSeconds: 7200 }, isProvisional: false,
+      devices: [{ id: 1, name: 'Laptop' }, { id: 2, name: 'Desktop' }] as never[],
+      usageData: [1, 2].map(deviceId => ({ deviceId, appId: 7, appName: 'Code', title: `Work ${deviceId}`,
+        startTime: new Date('2026-03-08T06:00:00Z'), endTime: new Date('2026-03-08T07:00:00Z') })) as never[],
+    },
+    global: { renderStubDefaultSlot: true, stubs: { AppIcon: true } },
+  })
+  await flushPromises()
+  const replay = wrapper.findAll('section')[0]
+  expect(replay.text()).toContain('Laptop')
+  expect(replay.text()).toContain('Desktop')
+  expect(replay.findAll('[title]').length).toBe(2)
+  wrapper.unmount()
 })

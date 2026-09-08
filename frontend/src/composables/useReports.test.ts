@@ -125,3 +125,24 @@ describe('useReports Local Calendar Window', () => {
     expect(reports.appSummaries.value.map(app => app.appName)).toEqual(['new'])
   })
 })
+
+it('retains a same-window report on refresh failure, but clears it when the day or device changes', async () => {
+  const current = ref(context)
+  const device = ref(0)
+  const reports = useReports('alice', device, current)
+  vi.mocked(fetchPublicDailyReport).mockResolvedValueOnce({ apps: [{ appId: 1, appName: 'Yesterday', durationSeconds: 120 }] } as never)
+  await reports.loadDaily()
+  vi.mocked(fetchPublicDailyReport).mockRejectedValueOnce(new Error('offline'))
+  await reports.loadDaily()
+  expect(reports.appSummaries.value[0]?.appName).toBe('Yesterday')
+  current.value = { ...context, day: { ...context.day, start: '2026-03-09T04:00:00Z', endExclusive: '2026-03-10T04:00:00Z' } }
+  vi.mocked(fetchPublicDailyReport).mockRejectedValueOnce(new Error('offline'))
+  await reports.loadDaily()
+  expect(reports.appSummaries.value).toEqual([])
+  vi.mocked(fetchPublicDailyReport).mockResolvedValueOnce({ apps: [{ appId: 1, appName: 'Today', durationSeconds: 120 }] } as never)
+  await reports.loadDaily()
+  device.value = 42
+  vi.mocked(fetchPublicDailyReport).mockRejectedValueOnce(new Error('offline'))
+  await reports.loadDaily()
+  expect(reports.appSummaries.value).toEqual([])
+})

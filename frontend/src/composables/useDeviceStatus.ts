@@ -3,7 +3,7 @@ import type { ApiError, DeviceInfoResponse, DeviceStatusResponse } from '../api/
 import { fetchPublicDeviceStatus, toApiError } from '../api/index'
 import { formatExactLocalDateTime, formatLastSeen, latestDate } from '../lib/lastSeen'
 
-/** 一台设备的在场事实。看板头部芯片与"当前应用"面板都吃这个。 */
+/** 一台设备的在场事实。供当前使用面板展示。 */
 export interface DevicePresence {
   deviceId: number
   deviceName: string
@@ -65,10 +65,6 @@ export function useDeviceStatus(
   /** 任一设备在线即"在场"。 */
   const isAlive = computed(() => onlinePresences.value.length > 0)
 
-  // 单值出口：仅在恰好一台在线时有意义（多台并发时由 presences 逐行展示）。
-  const currentApp = computed(() => onlinePresences.value[0]?.currentApp ?? null)
-  const currentAppId = computed(() => onlinePresences.value[0]?.currentAppId ?? null)
-  const currentAppKey = computed(() => onlinePresences.value[0]?.currentAppKey ?? null)
   /** 聚合视图取所选范围内真正最近的一次心跳，而不是设备列表第一项。 */
   const lastSeen = computed(() => latestDate(presences.value.map(p => p.lastSeen)))
   const lastSeenStr = computed(() => formatLastSeen(lastSeen.value))
@@ -108,9 +104,6 @@ export function useDeviceStatus(
     onlinePresences,
     error,
     isAlive,
-    currentApp,
-    currentAppId,
-    currentAppKey,
     lastSeenStr,
     lastSeenTitle,
     load,

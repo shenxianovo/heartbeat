@@ -13,7 +13,7 @@ import {
   type ReviewItem,
 } from '../teaching/teachingFlow'
 import ProposalReview from './ProposalReview.vue'
-import { Card } from '@/components/ui/card'
+import DashboardCard from './DashboardCard.vue'
 import type { CalendarContext } from '../calendar/localCalendarWindow'
 
 /**
@@ -191,153 +191,151 @@ function backToAnswer(c: TeachingCard) {
 </script>
 
 <template>
-  <Card v-if="cards.length > 0" class="mb-6 gap-3 border-border/60 bg-card/80 py-5 backdrop-blur-sm">
-    <div class="flex flex-col gap-4 px-5">
-      <h2 class="text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-        认识一下 · {{ cards.length }} 个说不清的活动
-      </h2>
+  <DashboardCard v-if="cards.length > 0">
+    <h2 class="text-sm font-semibold text-foreground">
+      认识一下 · {{ cards.length }} 个说不清的活动
+    </h2>
 
-      <div
-        v-for="c in cards"
-        :key="c.q.id ?? ''"
-        class="flex flex-col gap-3 rounded-lg border border-border/50 bg-background/40 p-4"
-      >
-        <!-- ===== 证据卡:系统观察到的活动,不是已确定的归属 ===== -->
-        <p class="text-[0.92rem]">{{ c.q.question }}</p>
+    <div
+      v-for="c in cards"
+      :key="c.q.id ?? ''"
+      class="flex flex-col gap-3 rounded-lg border border-border/50 bg-background/40 p-4"
+    >
+      <!-- ===== 证据卡:系统观察到的活动,不是已确定的归属 ===== -->
+      <p class="text-[0.92rem]">{{ c.q.question }}</p>
 
-        <div v-if="isRecurrence(c.q)" class="rounded-md border border-border/40 bg-background/50 px-3 py-2 text-[0.8rem] text-muted-foreground">
-          上次记录：「{{ c.q.episodeText }}」（{{ c.q.episodeDate ? dateOnlyLabel(c.q.episodeDate) : '' }}）
+      <div v-if="isRecurrence(c.q)" class="rounded-md border border-border/40 bg-background/50 px-3 py-2 text-[0.8rem] text-muted-foreground">
+        上次记录：「{{ c.q.episodeText }}」（{{ c.q.episodeDate ? dateOnlyLabel(c.q.episodeDate) : '' }}）
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <p class="text-[0.72rem] text-muted-foreground/60">
+          系统观察到的活动<template v-if="formatTimeRange(c.q.approximateStart, c.q.approximateEnd)">（{{ formatTimeRange(c.q.approximateStart, c.q.approximateEnd) }} 前后）</template>——归属由你决定：
+        </p>
+        <ul class="flex flex-col gap-0.5">
+          <li
+            v-for="(o, i) in c.q.observations ?? []"
+            :key="i"
+            class="flex items-baseline gap-2 text-[0.8rem]"
+            :class="o.matchesFingerprint ? 'text-foreground' : 'text-muted-foreground/70'"
+          >
+            <span class="shrink-0 font-mono text-[0.7rem] text-muted-foreground/50">{{ o.source }}</span>
+            <span class="min-w-0 truncate">{{ o.value }}<template v-if="o.detail"> · {{ o.detail }}</template></span>
+            <span class="ml-auto shrink-0 font-mono text-[0.7rem] text-muted-foreground/50">{{ formatDuration(o.seconds ?? 0) }}</span>
+          </li>
+        </ul>
+        <p class="text-[0.72rem] text-muted-foreground/50">
+          指纹：<span class="font-mono">{{ describeMatcher(c.q.matcher, readingLabels) }}</span>
+        </p>
+      </div>
+
+      <!-- ===== Stage 1:自然语言回答 ===== -->
+      <template v-if="c.stage === 'evidence' || c.stage === 'proposing'">
+        <textarea
+          v-model="c.answer"
+          rows="2"
+          :disabled="c.stage === 'proposing'"
+          placeholder="用你自己的话说说这是什么——一次性的事、持续的脉络、属于哪个已有语境,或者还不确定,都可以直接写"
+          class="w-full resize-y rounded-md border border-border/50 bg-background/60 px-2.5 py-1.5 text-[0.9rem] outline-none focus:border-border disabled:opacity-50"
+        ></textarea>
+
+        <p v-if="c.error" class="text-[0.78rem] text-destructive">{{ c.error }}</p>
+
+        <div v-if="c.muteConfirm" class="flex items-center justify-between gap-2 rounded-md border border-border/40 bg-background/50 px-3 py-2">
+          <span class="text-[0.78rem] text-muted-foreground">确认后不再就这个{{ isRecurrence(c.q) ? '探针' : '指纹' }}发问；原始活动记录不受影响，仍会如实出现在回顾里。</span>
+          <div class="flex shrink-0 gap-2">
+            <button class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground hover:text-foreground" :disabled="c.busy" @click="c.muteConfirm = false">取消</button>
+            <button class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-foreground disabled:opacity-50" :disabled="c.busy" @click="confirmMute(c)">确认静音</button>
+          </div>
         </div>
 
-        <div class="flex flex-col gap-1.5">
-          <p class="text-[0.72rem] text-muted-foreground/60">
-            系统观察到的活动<template v-if="formatTimeRange(c.q.approximateStart, c.q.approximateEnd)">（{{ formatTimeRange(c.q.approximateStart, c.q.approximateEnd) }} 前后）</template>——归属由你决定：
-          </p>
-          <ul class="flex flex-col gap-0.5">
-            <li
-              v-for="(o, i) in c.q.observations ?? []"
-              :key="i"
-              class="flex items-baseline gap-2 text-[0.8rem]"
-              :class="o.matchesFingerprint ? 'text-foreground' : 'text-muted-foreground/70'"
-            >
-              <span class="shrink-0 font-mono text-[0.7rem] text-muted-foreground/50">{{ o.source }}</span>
-              <span class="min-w-0 truncate">{{ o.value }}<template v-if="o.detail"> · {{ o.detail }}</template></span>
-              <span class="ml-auto shrink-0 font-mono text-[0.7rem] text-muted-foreground/50">{{ formatDuration(o.seconds ?? 0) }}</span>
-            </li>
-          </ul>
-          <p class="text-[0.72rem] text-muted-foreground/50">
-            指纹：<span class="font-mono">{{ describeMatcher(c.q.matcher, readingLabels) }}</span>
-          </p>
-        </div>
-
-        <!-- ===== Stage 1:自然语言回答 ===== -->
-        <template v-if="c.stage === 'evidence' || c.stage === 'proposing'">
-          <textarea
-            v-model="c.answer"
-            rows="2"
+        <div class="flex items-center justify-end gap-2">
+          <button
+            v-if="c.expired"
+            class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-foreground"
+            @click="load()"
+          >刷新问题</button>
+          <button
+            class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
             :disabled="c.stage === 'proposing'"
-            placeholder="用你自己的话说说这是什么——一次性的事、持续的脉络、属于哪个已有语境,或者还不确定,都可以直接写"
-            class="w-full resize-y rounded-md border border-border/50 bg-background/60 px-2.5 py-1.5 text-[0.9rem] outline-none focus:border-border disabled:opacity-50"
-          ></textarea>
+            title="不写入任何内容,下次可能还会问"
+            @click="remove(c)"
+          >跳过</button>
+          <button
+            class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+            :disabled="c.stage === 'proposing' || c.muteConfirm"
+            title="别再问这个"
+            @click="c.muteConfirm = true"
+          >别再问</button>
+          <button
+            class="glass-control cursor-pointer px-3 py-1 text-[0.75rem] text-foreground transition-colors disabled:opacity-50"
+            :disabled="c.stage === 'proposing' || !c.answer.trim() || !c.q.windowKey || c.expired"
+            @click="propose(c)"
+          >{{ c.stage === 'proposing' ? '整理中…' : '整理成变更' }}</button>
+        </div>
+        <p v-if="c.stage === 'proposing'" class="text-[0.72rem] text-muted-foreground/60">
+          正在把你的解释整理成结构化变更——这一步不会写入任何知识,整理好后由你逐项确认。
+        </p>
+      </template>
+
+      <!-- ===== Stage 2:提案审阅(逐项编辑/取消,确认后才提交) ===== -->
+      <template v-else-if="c.stage === 'review' || c.stage === 'committing'">
+        <div class="flex flex-col gap-3 border-t border-border/40 pt-3">
+          <p v-if="c.items.length === 0" class="text-[0.85rem] text-muted-foreground">
+            这次没有需要保存的变更。可以直接关掉,或回去补充说明。
+          </p>
+
+          <ProposalReview
+            :proposal="c.proposal"
+            :items="c.items"
+            :strands="strands"
+            :reading-labels="readingLabels"
+            :locked="c.stage === 'committing'"
+            :failed-op-id="c.failedOpId"
+          />
 
           <p v-if="c.error" class="text-[0.78rem] text-destructive">{{ c.error }}</p>
 
-          <div v-if="c.muteConfirm" class="flex items-center justify-between gap-2 rounded-md border border-border/40 bg-background/50 px-3 py-2">
-            <span class="text-[0.78rem] text-muted-foreground">确认后不再就这个{{ isRecurrence(c.q) ? '探针' : '指纹' }}发问；原始活动记录不受影响，仍会如实出现在回顾里。</span>
-            <div class="flex shrink-0 gap-2">
-              <button class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground hover:text-foreground" :disabled="c.busy" @click="c.muteConfirm = false">取消</button>
-              <button class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-foreground disabled:opacity-50" :disabled="c.busy" @click="confirmMute(c)">确认静音</button>
-            </div>
-          </div>
-
           <div class="flex items-center justify-end gap-2">
             <button
-              v-if="c.expired"
-              class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-foreground"
-              @click="load()"
-            >刷新问题</button>
-            <button
-              class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-              :disabled="c.stage === 'proposing'"
-              title="不写入任何内容,下次可能还会问"
+              v-if="c.items.length === 0"
+              class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground"
               @click="remove(c)"
-            >跳过</button>
+            >关掉</button>
+            <button
+              v-if="c.conflict"
+              class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-foreground disabled:opacity-50"
+              :disabled="c.stage === 'committing'"
+              title="基于最新知识状态重新整理提案,再重新审阅"
+              @click="reproposeAfterConflict(c)"
+            >重新加载最新知识并重新审阅</button>
             <button
               class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-              :disabled="c.stage === 'proposing' || c.muteConfirm"
-              title="别再问这个"
-              @click="c.muteConfirm = true"
-            >别再问</button>
+              :disabled="c.stage === 'committing'"
+              title="回去修改回答(当前提案会丢弃)"
+              @click="backToAnswer(c)"
+            >返回修改回答</button>
             <button
               class="glass-control cursor-pointer px-3 py-1 text-[0.75rem] text-foreground transition-colors disabled:opacity-50"
-              :disabled="c.stage === 'proposing' || !c.answer.trim() || !c.q.windowKey || c.expired"
-              @click="propose(c)"
-            >{{ c.stage === 'proposing' ? '整理中…' : '整理成变更' }}</button>
+              :disabled="c.stage === 'committing' || !canCommit(c.items)"
+              @click="commit(c)"
+            >{{ c.stage === 'committing' ? '提交中…' : `确认保存 ${selectedOps(c.items).length} 项` }}</button>
           </div>
-          <p v-if="c.stage === 'proposing'" class="text-[0.72rem] text-muted-foreground/60">
-            正在把你的解释整理成结构化变更——这一步不会写入任何知识,整理好后由你逐项确认。
-          </p>
-        </template>
+        </div>
+      </template>
 
-        <!-- ===== Stage 2:提案审阅(逐项编辑/取消,确认后才提交) ===== -->
-        <template v-else-if="c.stage === 'review' || c.stage === 'committing'">
-          <div class="flex flex-col gap-3 border-t border-border/40 pt-3">
-            <p v-if="c.items.length === 0" class="text-[0.85rem] text-muted-foreground">
-              这次没有需要保存的变更。可以直接关掉,或回去补充说明。
-            </p>
-
-            <ProposalReview
-              :proposal="c.proposal"
-              :items="c.items"
-              :strands="strands"
-              :reading-labels="readingLabels"
-              :locked="c.stage === 'committing'"
-              :failed-op-id="c.failedOpId"
-            />
-
-            <p v-if="c.error" class="text-[0.78rem] text-destructive">{{ c.error }}</p>
-
-            <div class="flex items-center justify-end gap-2">
-              <button
-                v-if="c.items.length === 0"
-                class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground"
-                @click="remove(c)"
-              >关掉</button>
-              <button
-                v-if="c.conflict"
-                class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-foreground disabled:opacity-50"
-                :disabled="c.stage === 'committing'"
-                title="基于最新知识状态重新整理提案,再重新审阅"
-                @click="reproposeAfterConflict(c)"
-              >重新加载最新知识并重新审阅</button>
-              <button
-                class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-                :disabled="c.stage === 'committing'"
-                title="回去修改回答(当前提案会丢弃)"
-                @click="backToAnswer(c)"
-              >返回修改回答</button>
-              <button
-                class="glass-control cursor-pointer px-3 py-1 text-[0.75rem] text-foreground transition-colors disabled:opacity-50"
-                :disabled="c.stage === 'committing' || !canCommit(c.items)"
-                @click="commit(c)"
-              >{{ c.stage === 'committing' ? '提交中…' : `确认保存 ${selectedOps(c.items).length} 项` }}</button>
-            </div>
+      <!-- ===== 提交成功:真实 ID/path 回读 ===== -->
+      <template v-else-if="c.stage === 'done'">
+        <div class="flex flex-col gap-2 border-t border-border/40 pt-3">
+          <p class="text-[0.85rem]">已保存 ✓</p>
+          <ul class="flex flex-col gap-0.5">
+            <li v-for="(line, i) in c.summary" :key="i" class="text-[0.78rem] text-muted-foreground">{{ line }}</li>
+          </ul>
+          <div class="flex justify-end">
+            <button class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground hover:text-foreground" @click="remove(c)">收好了</button>
           </div>
-        </template>
-
-        <!-- ===== 提交成功:真实 ID/path 回读 ===== -->
-        <template v-else-if="c.stage === 'done'">
-          <div class="flex flex-col gap-2 border-t border-border/40 pt-3">
-            <p class="text-[0.85rem]">已保存 ✓</p>
-            <ul class="flex flex-col gap-0.5">
-              <li v-for="(line, i) in c.summary" :key="i" class="text-[0.78rem] text-muted-foreground">{{ line }}</li>
-            </ul>
-            <div class="flex justify-end">
-              <button class="glass-control cursor-pointer px-2.5 py-1 text-[0.75rem] text-muted-foreground hover:text-foreground" @click="remove(c)">收好了</button>
-            </div>
-          </div>
-        </template>
-      </div>
+        </div>
+      </template>
     </div>
-  </Card>
+  </DashboardCard>
 </template>

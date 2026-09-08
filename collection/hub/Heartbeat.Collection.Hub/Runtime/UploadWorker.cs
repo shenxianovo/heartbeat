@@ -4,6 +4,7 @@ using Heartbeat.Core.DTOs.Input;
 using Heartbeat.Core.DTOs.Segments;
 using Heartbeat.Collection.Hub.Upload;
 using Serilog;
+using Heartbeat.Collection.Hub.Hosting;
 
 namespace Heartbeat.Collection.Hub.Runtime
 {
@@ -17,10 +18,20 @@ namespace Heartbeat.Collection.Hub.Runtime
         IHubConfiguration configuration,
         IInputEventRecordingPolicy inputRecording,
         DeclarationUplinkService declarationUplink,
-        IHubRuntimeHooks hooks) : PeriodicUploadWorker(() => configuration.Current.UploadInterval)
+        IHubRuntimeHooks hooks) : PeriodicUploadWorker(() => configuration.Current.UploadInterval), IHostShutdownEvidence
     {
         public UploadDrainResult<ActivitySegmentItem>? SegmentDrain => segmentStream.LastDrain;
         public UploadDrainResult<InputEventItem>? InputDrain => inputRecording.Enabled ? inputStream.LastDrain : null;
+
+        private bool _stopped;
+        public DeliveryRemainder ShutdownRemainder => _stopped
+            ? segmentStream.Remainder + inputStream.Remainder : DeliveryRemainder.Unknown;
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
+        {
+            await base.StopAsync(cancellationToken);
+            _stopped = true;
+        }
 
         protected override Task ExecuteAsync(CancellationToken stoppingToken)
         {

@@ -9,6 +9,7 @@ using Heartbeat.Desktop.UI.Views;
 using Heartbeat.Collection.Hub.Collectors.Packages;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Heartbeat.Collection.Hub.Hosting;
 
 namespace Heartbeat.Desktop.Mac;
 
@@ -23,17 +24,16 @@ public sealed class MacDesktopRuntime : IWindowController, IDesktopApplicationPa
         IHost host, DesktopApplicationLifetime application, MacDesktopState state, RingBufferSink logFeed)
     {
         _application = application;
-        DesktopState = state;
+        DesktopState = new(state, host.Services.GetRequiredService<HostOperationAdmission>());
         LogFeed = logFeed;
         CollectorMarketplace = new DesktopCollectorMarketplace(
             host.Services.GetRequiredService<ICollectorMarketplace>());
-        Updates = host.Services.GetRequiredService<DesktopInstallation>().CreateUpdates(PrepareForUpdateAsync);
         _application.Attach(this);
-        Updates.Start();
+
     }
 
-    public MacDesktopState DesktopState { get; }
-    public IDesktopUpdates Updates { get; }
+    public DesktopStateCommands DesktopState { get; }
+    public IDesktopUpdates Updates => _application.Updates;
     public RingBufferSink LogFeed { get; }
     public DesktopCollectorMarketplace CollectorMarketplace { get; }
     public bool IsShutdownPrepared => _application.IsShutdownPrepared;
@@ -65,20 +65,11 @@ public sealed class MacDesktopRuntime : IWindowController, IDesktopApplicationPa
             await clipboard.SetTextAsync(text);
     });
 
-    public Task QuitAsync() => _application.RequestExitAsync(DesktopExitReason.Quit);
-
-    private Task PrepareForUpdateAsync() =>
-        _application.RequestExitAsync(DesktopExitReason.UpdateRestart);
-
-    Task IDesktopApplicationParticipant.PrepareToExitAsync(DesktopExitReason? reason)
-    {
-        if (reason == DesktopExitReason.Quit) Updates.ScheduleOnExitIfReady();
-        return Task.CompletedTask;
-    }
+    public Task QuitAsync() => _application.QuitAsync();
 
     ValueTask IAsyncDisposable.DisposeAsync()
     {
-        Updates.Dispose();
+        DesktopState.Dispose();
         // MacDesktopState is owned and disposed by the Host service provider.
         return ValueTask.CompletedTask;
     }

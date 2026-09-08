@@ -37,6 +37,21 @@ public sealed class UploadStream<T>
     public event Action<UploadStreamStatus>? StatusChanged;
     public UploadDrainResult<T>? LastDrain { get; private set; }
 
+    /// <summary>Current custody, including disabled streams that have not attempted transport.</summary>
+    public DeliveryRemainder Remainder
+    {
+        get
+        {
+            var remainder = new DeliveryRemainder(_deadLetterStore?.Count ?? 0, 0);
+            foreach (var source in _sources)
+            {
+                try { remainder += source.Remainder; }
+                catch { remainder += DeliveryRemainder.Unknown; }
+            }
+            return remainder;
+        }
+    }
+
     /// <summary>
     /// Clears this stream's in-process 426 pause for diagnostics. It intentionally does not clear
     /// the process-wide compatibility state: production recovery requires updating and restarting
@@ -97,13 +112,7 @@ public sealed class UploadStream<T>
             else
                 RecoverTransientStatus(UploadStreamState.CacheWriteFailed);
         }
-        var remainder = new DeliveryRemainder(_deadLetterStore?.Count ?? 0, 0);
-        foreach (var source in _sources)
-        {
-            try { remainder += source.Remainder; }
-            catch { remainder += DeliveryRemainder.Unknown; }
-        }
-        return LastDrain = new(items, delivered, remainder, error);
+        return LastDrain = new(items, delivered, Remainder, error);
     }
 
     private async Task<BatchResult<T>> ProcessBatchAsync(List<T> items, CancellationToken cancellationToken)

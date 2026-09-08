@@ -37,6 +37,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly List<LogEntry> _allLogs = [];
 
     [ObservableProperty]
+    private bool _changesAccepted = true;
+
+    [ObservableProperty]
     private string _currentApp = "(未检测)";
 
     [ObservableProperty]
@@ -227,6 +230,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void ApplyState(DesktopStateSnapshot snapshot)
     {
+        ChangesAccepted = snapshot.ChangesAccepted;
         CurrentApp = FormatActivity(snapshot.CurrentActivity) ?? "(未检测)";
         ApplySettings(snapshot);
         RebuildCollectors(snapshot);
@@ -321,9 +325,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             system = new CollectorItemViewModel(
                 ActivitySources.System,
-                _desktopState.SetSystemCapabilityEnabled,
-                _desktopState.RecoverSystemCapability,
-                _desktopState.RevealSystemCapabilityApplication);
+                (capability, enabled) => TryChange(() => _desktopState.SetSystemCapabilityEnabled(capability, enabled)),
+                capability => TryChange(() => _desktopState.RecoverSystemCapability(capability)),
+                capability => TryChange(() => _desktopState.RevealSystemCapabilityApplication(capability)));
             Collectors.Add(system);
         }
         system.SetSystemCapabilities(snapshot.Capabilities);
@@ -592,7 +596,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(SelectedThemeMode));
         if (!_suppressSettings && Enum.IsDefined((DesktopThemeMode)value))
-            _desktopState.SetThemeMode((DesktopThemeMode)value);
+            TryChange(() => _desktopState.SetThemeMode((DesktopThemeMode)value));
     }
 
     public DesktopThemeMode SelectedThemeMode => Enum.IsDefined((DesktopThemeMode)SelectedThemeIndex)
@@ -613,7 +617,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnLoginStartEnabledChanged(bool value)
     {
         if (!_suppressLoginStart)
-            _desktopState.SetLoginStartEnabled(value);
+            TryChange(() => _desktopState.SetLoginStartEnabled(value));
+    }
+
+    private bool TryChange(Action change)
+    {
+        try { change(); return true; }
+        catch (InvalidOperationException exception) when (!_desktopState.Current.ChangesAccepted)
+        {
+            ApplyState(_desktopState.Current);
+            SaveStatusMessage = exception.Message;
+            SaveStatusIsError = true;
+            return false;
+        }
     }
 
     private bool CanSaveConfig() => HasUnsavedChanges;
@@ -630,7 +646,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         var normalizedApiKey = ApiKey.Trim();
         var normalizedDeviceName = DeviceName.Trim();
-        _desktopState.SaveSettings(new DesktopSettingsInput(normalizedApiKey, normalizedDeviceName, uploadInterval));
+        if (!TryChange(() => _desktopState.SaveSettings(new(normalizedApiKey, normalizedDeviceName, uploadInterval)))) return;
         if (_lastSettings != null)
             _lastSettings = _lastSettings with
             {
@@ -652,7 +668,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool CanApplyUpdate() => UpdateState == UpdateState.ReadyToApply;
 
     [RelayCommand(CanExecute = nameof(CanApplyUpdate))]
-    private Task ApplyUpdateAsync() => _updates.ApplyAsync();
+    private async Task ApplyUpdateAsync()
+    {
+        try { await _updates.ApplyAsync(); }
+        catch (Exception exception)
+        {
+            Serilog.Log.Warning(exception, "更新退出请求未完成");
+            UpdateCheckMessage = exception.Message;
+        }
+    }
 
     [RelayCommand]
     private async Task CheckForUpdateAsync()

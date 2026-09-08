@@ -25,6 +25,7 @@ public static class CollectorHostServiceCollectionExtensions
         this IServiceCollection services, CollectorRuntimeStorageOptions options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(options.DataDirectory);
+        services.TryAddSingleton<HostOperationAdmission>();
         services.TryAddSingleton(options);
         services.TryAddSingleton(provider =>
         {
@@ -57,6 +58,7 @@ public static class CollectorHostServiceCollectionExtensions
     public static IServiceCollection AddCollectorMarketplace(
         this IServiceCollection services, CollectorMarketplaceHostOptions options)
     {
+        services.TryAddSingleton<HostOperationAdmission>();
         services.TryAddSingleton(options);
         services.AddHttpClient(CollectorMarketplaceHost.HttpClientName);
         services.TryAddSingleton<CollectorMarketplaceHost>();

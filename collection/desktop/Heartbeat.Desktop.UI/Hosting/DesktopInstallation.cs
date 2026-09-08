@@ -13,7 +13,8 @@ public interface IDesktopLoginStart
 public interface IDesktopUpdates : IUpdateController, IDisposable
 {
     void Start();
-    bool ScheduleOnExitIfReady();
+    // Freeze the ready release now; the application invokes the returned action only after safe cleanup.
+    Action PrepareExit(DesktopExitReason reason);
 }
 
 /// <summary>Installation mutations are available only through an explicitly bound adapter.</summary>
@@ -47,7 +48,7 @@ public sealed class DesktopInstallation(IDesktopLoginStart loginStart,
         public Task<UpdateCheckResult> CheckAsync() => Task.FromResult(UpdateCheckResult.Skipped);
         public Task<bool> ApplyAsync() => Task.FromResult(false);
         public void Start() { }
-        public bool ScheduleOnExitIfReady() => false;
+        public Action PrepareExit(DesktopExitReason reason) => () => { };
         public void Dispose() { }
     }
 }

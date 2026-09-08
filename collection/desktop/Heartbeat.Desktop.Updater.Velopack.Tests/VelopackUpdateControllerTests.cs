@@ -1,6 +1,11 @@
 using Heartbeat.Desktop.Updater.Velopack;
 using Heartbeat.Desktop.UI.Presentation;
 using System.Net.Http;
+using Heartbeat.Desktop.UI.Hosting;
+using Heartbeat.Collection.Hub.Hosting;
+using Heartbeat.Collection.Hub.Upload;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Heartbeat.Desktop.Updater.Velopack.Tests;
 
@@ -83,37 +88,94 @@ public sealed class VelopackUpdateControllerTests
         await ready.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(await controller.ApplyAsync());
-        Assert.Equal(["schedule", "prepare"], lifecycle);
+        Assert.Equal(["prepare"], lifecycle);
     }
 
-    [Fact]
-    public async Task FailedApplyScheduling_LeavesAgentRunningAndReadyToRetry()
+    [Theory]
+    [InlineData(DesktopExitReason.Quit, false, true)]
+    [InlineData(DesktopExitReason.UpdateRestart, false, true)]
+    [InlineData(DesktopExitReason.UpdateRestart, true, true)]
+    [InlineData(DesktopExitReason.UpdateRestart, false, false)]
+    public async Task Application_ConsumesCustodyBeforeOneInstallerAction(
+        DesktopExitReason reason, bool schedulingFails, bool durable)
     {
         var client = new FakeReleaseUpdateClient
         {
-            Update = new FakeReleaseUpdate("2.0.0"),
-            ScheduleException = new IOException("updater unavailable"),
+            Update = new FakeReleaseUpdate("2.0.0"), AutoCompleteDownload = true,
+            ScheduleException = schedulingFails ? new IOException("updater unavailable") : null
         };
-        var preparedForRestart = false;
-        using var controller = new VelopackUpdateController(
-            client,
-            () =>
+        var subtree = new StoppingSubtree(durable);
+        var host = new HostBuilder().ConfigureServices(services =>
+        {
+            services.AddSingleton<HostOperationAdmission>();
+            services.AddSingleton(new DesktopInstallation(DesktopInstallation.Detached.LoginStart,
+                restart => new VelopackUpdateController(client, restart, [])));
+            services.AddSingleton<IHostedService>(subtree);
+        }).Build();
+        var application = new DesktopApplicationLifetime(host);
+        var desktop = new DesktopParticipant();
+        try
+        {
+            await host.StartAsync();
+            application.Attach(desktop);
+            var updates = (VelopackUpdateController)application.Updates;
+            Assert.Equal(UpdateState.ReadyToApply, updates.Current.State);
+            client.Applied = _ => Assert.True(desktop.Disposed);
+            var exiting = application.RequestExitAsync(reason);
+            await subtree.Entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Same(exiting, application.RequestExitAsync(reason));
+            Assert.Equal(0, client.ScheduleAttempts);
+            Assert.Equal(0, desktop.Exits);
+            var duplicateApply = reason == DesktopExitReason.UpdateRestart ? updates.ApplyAsync() : null;
+            subtree.Release.SetResult();
+            if (durable)
             {
-                preparedForRestart = true;
-                return Task.CompletedTask;
-            },
-            []);
-        var ready = WaitForState(controller, UpdateState.ReadyToApply);
-        await controller.CheckAsync();
-        client.AllowDownloadToComplete.SetResult();
-        await ready.WaitAsync(TimeSpan.FromSeconds(2));
+                await exiting;
+                if (duplicateApply is not null) Assert.True(await duplicateApply);
+                Assert.Equal(1, client.ScheduleAttempts);
+                Assert.Equal(reason == DesktopExitReason.UpdateRestart, client.Restart);
+                Assert.Equal(1, desktop.Exits);
+                Assert.Equal(schedulingFails, application.Result!.FinalActionError is not null);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => exiting);
+                if (duplicateApply is not null)
+                    await Assert.ThrowsAsync<InvalidOperationException>(() => duplicateApply);
+                Assert.Equal(0, client.ScheduleAttempts);
+                Assert.Equal(0, desktop.Exits);
+                Assert.False(desktop.Disposed);
+            }
+        }
+        finally
+        {
+            subtree.Release.TrySetResult();
+            application.Dispose();
+            await ((IAsyncDisposable)host).DisposeAsync();
+        }
+    }
 
-        var applied = await controller.ApplyAsync();
+    private sealed class StoppingSubtree(bool durable) : IHostedService, IHostShutdownEvidence
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private bool _stopped;
+        public DeliveryRemainder ShutdownRemainder => _stopped && durable ? new(7, 0) : DeliveryRemainder.Unknown;
+        public Task StartAsync(CancellationToken token) => Task.CompletedTask;
+        public async Task StopAsync(CancellationToken token)
+        {
+            Entered.TrySetResult();
+            await Release.Task;
+            _stopped = true;
+        }
+    }
 
-        Assert.False(applied);
-        Assert.False(preparedForRestart);
-        Assert.Equal(UpdateState.ReadyToApply, controller.Current.State);
-        Assert.Equal("应用更新失败，请重试。", controller.Current.Error);
+    private sealed class DesktopParticipant : IDesktopApplicationParticipant
+    {
+        public bool Disposed { get; private set; }
+        public int Exits { get; private set; }
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+        public Task ExitAsync(DesktopExitReason reason) { Exits++; return Task.CompletedTask; }
     }
 
     [Fact]
@@ -176,6 +238,8 @@ public sealed class VelopackUpdateControllerTests
         public IReleaseUpdate? Update { get; set; }
         public Exception? CheckException { get; set; }
         public Exception? ScheduleException { get; set; }
+        public int ScheduleAttempts { get; private set; }
+        public bool Restart { get; private set; }
         public Queue<Exception> DownloadFailures { get; } = new();
         public bool AutoCompleteDownload { get; set; }
         public int DownloadAttempts { get; private set; }
@@ -198,10 +262,18 @@ public sealed class VelopackUpdateControllerTests
         }
         public void ScheduleUpdateAndRestart(IReleaseUpdate release)
         {
+            ScheduleAttempts++;
+            Restart = true;
             if (ScheduleException != null) throw ScheduleException;
             Applied?.Invoke(release);
         }
-        public void ScheduleUpdateAndExit(IReleaseUpdate release) { }
+        public void ScheduleUpdateAndExit(IReleaseUpdate release)
+        {
+            ScheduleAttempts++;
+            Restart = false;
+            if (ScheduleException != null) throw ScheduleException;
+            Applied?.Invoke(release);
+        }
     }
 
     private sealed record FakeReleaseUpdate(string Version) : IReleaseUpdate;

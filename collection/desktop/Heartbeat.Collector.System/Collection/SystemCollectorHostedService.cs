@@ -6,6 +6,8 @@ using Heartbeat.Collection.Hub.Collectors.Runtime;
 using Heartbeat.Collection.Hub.Configuration;
 using Heartbeat.Collection.Hub.Segments;
 using Microsoft.Extensions.Hosting;
+using Heartbeat.Collection.Hub.Hosting;
+using Heartbeat.Collection.Hub.Upload;
 
 namespace Heartbeat.Collector.System.Collection;
 
@@ -22,10 +24,14 @@ public sealed class SystemCollectorHostedService(
     CollectorRuntime runtime,
     IDeviceIdentity deviceIdentity,
     SystemInProcessCollector collector,
-    ICollectorDeclarationStore declarations) : IHostedService, IDisposable, IAsyncDisposable
+    ICollectorDeclarationStore declarations) : IHostedService, IDisposable, IAsyncDisposable, IHostShutdownEvidence
 {
     private InProcessCollectorActivation? _activation;
     public InProcessCollectorDrainResult? DrainResult => _activation?.DrainResult;
+
+    public DeliveryRemainder ShutdownRemainder => DrainResult?.LogicalResult is
+        { RemainderDurable: true, PendingFacts: { } facts, PendingGaps: { } gaps }
+            ? new(facts + gaps, 0) : DeliveryRemainder.Unknown;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {

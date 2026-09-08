@@ -9,7 +9,7 @@
         MinWidth="760"
         MinHeight="520"
         WindowStartupLocation="CenterScreen">
-  <Grid>
+  <Grid IsEnabled="{Binding ChangesAccepted}">
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="Auto" />
       <ColumnDefinition Width="*" />

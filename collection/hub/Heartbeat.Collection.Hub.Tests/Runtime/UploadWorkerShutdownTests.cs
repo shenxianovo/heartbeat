@@ -2,6 +2,7 @@ using System.Net;
 using Heartbeat.Collection.Hub.Collectors;
 using Heartbeat.Collection.Hub.Configuration;
 using Heartbeat.Collection.Hub.Http;
+using Heartbeat.Collection.Hub.Hosting;
 using Heartbeat.Collection.Hub.Runtime;
 using Heartbeat.Collection.Hub.Storage;
 using Heartbeat.Collection.Hub.Upload;
@@ -80,6 +81,31 @@ public class UploadWorkerShutdownTests
         Assert.Equal(1, handler.Requests);
         Assert.Equal(16, cache.Items.Count);
         Assert.Equal(cache.Items.Count, source.ReadBatch().Count);
+    }
+
+    [Fact]
+    public async Task DisabledInputRecording_ReportsDurableBacklogWithoutSendingIt()
+    {
+        var cache = new Cache<InputEventItem>();
+        cache.Add([new InputEventItem()]);
+        var inputs = new UploadStream<InputEventItem>("输入", [new CachedUploadSource<InputEventItem>(cache)],
+            (_, _) => throw new InvalidOperationException("Disabled input must not be uploaded."));
+        var segments = new UploadStream<ActivitySegmentItem>("段", [], (_, _) => Task.FromResult(ApiResult.Ok));
+        var settings = new Settings();
+        using var http = new HttpClient();
+        using var worker = new UploadWorker(segments, inputs, settings, new DisabledInput(),
+            new DeclarationUplinkService(new HeartbeatApiClient(http), settings), new NullHubRuntimeHooks());
+        await worker.StopAsync(CancellationToken.None);
+        Assert.Null(worker.InputDrain);
+        var evidence = Assert.IsAssignableFrom<IHostShutdownEvidence>(worker);
+        Assert.Equal(new DeliveryRemainder(1, 0), evidence.ShutdownRemainder);
+        Assert.Single(cache.Items);
+    }
+
+    private sealed class DisabledInput : IInputEventRecordingPolicy
+    {
+        public bool Enabled => false;
+        public event Action<bool>? Changed { add { } remove { } }
     }
 
     private sealed class RejectingHandler(CancellationTokenSource deadline) : HttpMessageHandler

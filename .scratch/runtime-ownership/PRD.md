@@ -26,6 +26,11 @@ Desktop 可从 Host snapshot 恢复操作展示，重启仅恢复 Installation/I
 并集完整保管。最终 .NET 1,173/1,173、Browser Host 5/5 通过，Standards/Spec 各 0 项未解决。
 本轮停在 04，01 人工门禁与 05 仍未完成，PRD 状态不变。
 
+2026-09-08：Ticket 05 按解耦与维护性目标实施统一短命令接纳、子树证据汇总与唯一最终动作。
+用户确认：安全停止后的安装器调度失败正常退出；数据未知时保留结果并阻止自动退出，恢复交互后置。
+Ticket 06 明确承接未知数据恢复、退出期限和原生安装验收；01 的真实原生验收仍未完成。
+整份 PRD 保持 `ready-for-human`，不以 05 的自动测试冒充完整产品验收。
+
 ## Problem Statement
 
 Heartbeat 的退出重构已由 00806ad 落地，但正常运行时的能力变更、原生 session、管理操作与数据交付仍依赖跨模块时序。管理界面关闭可能影响已接受操作，旧 native session 可能与新 session 共享资源。

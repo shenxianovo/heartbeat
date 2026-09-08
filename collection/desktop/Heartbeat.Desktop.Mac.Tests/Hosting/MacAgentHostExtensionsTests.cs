@@ -1,4 +1,6 @@
 using Heartbeat.Desktop.Mac.Configuration;
+using Heartbeat.Desktop.UI.Hosting;
+using Heartbeat.Collection.Hub.Hosting;
 using Heartbeat.Desktop.Mac.Hosting;
 using Heartbeat.Desktop.Mac.Identity;
 using Heartbeat.Desktop.Mac.Observations;
@@ -113,6 +115,35 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
             await service.StartAsync(CancellationToken.None);
         foreach (var service in Enumerable.Reverse(hosted))
             await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ApplicationExit_WithRealHostAndOfflineDurableTail_Completes()
+    {
+        using var host = new HostBuilder().ConfigureServices(services =>
+        {
+            foreach (var descriptor in BuildServices()) services.Add(descriptor);
+            services.AddSingleton(DesktopInstallation.Detached);
+        }).Build();
+        host.Services.GetRequiredService<MacConfigManager>().Update(config => config.IngestPort = 0);
+        await host.StartAsync();
+        using var application = new DesktopApplicationLifetime(host);
+        var desktop = new ExitParticipant();
+        application.Attach(desktop);
+        host.Services.GetRequiredService<FakeClock>().Advance(TimeSpan.FromSeconds(2));
+        host.Services.GetRequiredService<AppMonitorService>().PushCurrentSnapshot();
+        await application.RequestExitAsync(DesktopExitReason.Quit).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(desktop.Exited);
+        Assert.True(application.Result!.IsDataSafe,
+            string.Join("; ", application.Result.Delivery.Select(item => $"{item.Owner}: {item.Remainder}")));
+        Assert.Contains(application.Result.Delivery, item => item.Remainder.RetainedLocally > 0);
+    }
+
+    private sealed class ExitParticipant : IDesktopApplicationParticipant
+    {
+        public bool Exited { get; private set; }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public Task ExitAsync(DesktopExitReason reason) { Exited = true; return Task.CompletedTask; }
     }
 
     private static bool NamesANamedOptionalCollector(Type? type) =>

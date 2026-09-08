@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using Heartbeat.Desktop.UI.Hosting;
+using Heartbeat.Collection.Hub.Hosting;
+using Heartbeat.Collection.Hub.Upload;
+using Heartbeat.Desktop.UI.Presentation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -33,8 +36,8 @@ public sealed class DesktopApplicationLifetimeTests
         Assert.True(exiting.IsCompletedSuccessfully, exiting.Exception?.ToString());
         Assert.Equal(1, host.StopCalls);
         Assert.Equal(1, resource.DisposeCalls);
-        Assert.Equal(1, desktop.StopCalls);
-        Assert.Equal(reason, desktop.PreparationReason);
+        Assert.Equal(1, host.Updates.FinalCalls);
+        Assert.Equal(reason, host.Updates.Reason);
         Assert.Equal(1, desktop.ExitCalls);
     }
 
@@ -49,9 +52,10 @@ public sealed class DesktopApplicationLifetimeTests
         lifetime.Attach(desktop);
 
         var first = lifetime.RequestExitAsync(DesktopExitReason.Quit);
-        var second = lifetime.RequestExitAsync(DesktopExitReason.UpdateRestart);
+        var second = lifetime.RequestExitAsync(DesktopExitReason.Quit);
         Assert.Same(first, second);
-        Assert.Equal(DesktopExitReason.Quit, desktop.PreparationReason);
+        Assert.Throws<InvalidOperationException>(() => { _ = lifetime.RequestExitAsync(DesktopExitReason.UpdateRestart); });
+        Assert.Equal(0, desktop.ExitCalls);
         Assert.False(lifetime.IsShutdownPrepared);
         Assert.Equal(0, desktop.ExitCalls);
         release.SetResult();
@@ -63,7 +67,55 @@ public sealed class DesktopApplicationLifetimeTests
     }
 
     [Fact]
-    public void DisposalFailure_IsShared_AndDoesNotAuthorizeUiExit()
+    public void Exit_ClosesAdmissionBeforeAwaitingHostStop()
+    {
+        using var ui = new UiContext();
+        var release = new TaskCompletionSource();
+        var host = new TestHost(new YieldingResource { BeforeDispose = release.Task });
+        using var lifetime = new DesktopApplicationLifetime(host);
+        lifetime.Attach(new DesktopParticipant { OnExit = _ => ui.Stop() });
+        var admission = host.Services.GetRequiredService<HostOperationAdmission>();
+        admission.Run(() => { });
+        var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
+        try { Assert.Throws<InvalidOperationException>(() => admission.Run(() => { })); }
+        finally { release.SetResult(); ui.RunUntil(exiting); }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(1)]
+    public void UnconfirmedData_BlocksFinalActionEvenWhenStopSucceeds(int? unconfirmed)
+    {
+        using var ui = new UiContext();
+        var host = new TestHost(new YieldingResource()) { Remainder = new(0, unconfirmed) };
+        var lifetime = new DesktopApplicationLifetime(host);
+        var desktop = new DesktopParticipant();
+        lifetime.Attach(desktop);
+        var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
+        ui.RunUntil(exiting);
+        Assert.True(exiting.IsFaulted);
+        Assert.Equal(0, desktop.ExitCalls);
+        Assert.False(lifetime.IsShutdownPrepared);
+    }
+
+    [Fact]
+    public void NativeQuit_WithUnknownDataDoesNotPropagateAnUnhandledUiException()
+    {
+        using var ui = new UiContext();
+        var host = new TestHost(new YieldingResource()) { Remainder = DeliveryRemainder.Unknown };
+        using var lifetime = new DesktopApplicationLifetime(host);
+        var desktop = new DesktopParticipant();
+        lifetime.Attach(desktop);
+        var quit = lifetime.QuitAsync();
+        ui.RunUntil(quit);
+        Assert.True(quit.IsCompletedSuccessfully);
+        Assert.False(lifetime.Result!.IsDataSafe);
+        Assert.False(desktop.Disposed);
+        Assert.Equal(0, desktop.ExitCalls);
+    }
+
+    [Fact]
+    public void DurableData_DisposalFailureIsReported_AndStillExits()
     {
         using var ui = new UiContext();
         var error = new IOException("disposal failed");
@@ -73,39 +125,42 @@ public sealed class DesktopApplicationLifetimeTests
         lifetime.Attach(desktop);
         var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
         ui.RunUntil(exiting);
-        Assert.Same(error, Assert.Throws<IOException>(() => exiting.GetAwaiter().GetResult()));
+        Assert.True(exiting.IsCompletedSuccessfully);
         Assert.Same(exiting, lifetime.RequestExitAsync(DesktopExitReason.Quit));
-        Assert.False(lifetime.IsShutdownPrepared);
-        Assert.Equal(0, desktop.ExitCalls);
-        Assert.Same(error, Assert.Throws<IOException>(lifetime.Dispose));
+        Assert.Contains(error, lifetime.Result!.CleanupErrors);
+        Assert.True(lifetime.IsShutdownPrepared);
+        Assert.Equal(1, desktop.ExitCalls);
+        lifetime.Dispose();
         Assert.Equal(1, resource.DisposeCalls);
     }
 
     [Fact]
-    public void StopFailure_StillReleasesDesktopAndHostResources_WithoutAuthorizingExit()
+    public void FinalActionFailure_StillExitsWithDurableData()
     {
         using var ui = new UiContext();
         var error = new IOException("collector stop failed");
         var resource = new YieldingResource();
         var host = new TestHost(resource);
         var lifetime = new DesktopApplicationLifetime(host);
-        var desktop = new DesktopParticipant { StopFailure = error };
+        host.Updates.Failure = error;
+        var desktop = new DesktopParticipant();
         lifetime.Attach(desktop);
 
         var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
         ui.RunUntil(exiting);
 
-        Assert.Same(error, Assert.Throws<IOException>(() => exiting.GetAwaiter().GetResult()));
+        Assert.True(exiting.IsCompletedSuccessfully);
         Assert.True(desktop.Disposed);
         Assert.True(resource.Disposed);
         Assert.Equal(1, host.StopCalls);
-        Assert.Equal(0, desktop.ExitCalls);
-        Assert.False(lifetime.IsShutdownPrepared);
-        Assert.Same(error, Assert.Throws<IOException>(lifetime.Dispose));
+        Assert.Same(error, lifetime.Result!.FinalActionError);
+        Assert.Equal(1, desktop.ExitCalls);
+        Assert.True(lifetime.IsShutdownPrepared);
+        lifetime.Dispose();
     }
 
     [Fact]
-    public void HostStopFailure_SkipsExitSideEffectsButStillDisposesResources()
+    public void DurableData_HostStopFailureIsSeparateFromDataSafety()
     {
         using var ui = new UiContext();
         var failure = new IOException("host stop failed");
@@ -118,12 +173,13 @@ public sealed class DesktopApplicationLifetimeTests
         var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
         ui.RunUntil(exiting);
 
-        Assert.Same(failure, Assert.Throws<IOException>(() => exiting.GetAwaiter().GetResult()));
-        Assert.Equal(0, desktop.StopCalls);
-        Assert.Equal(0, desktop.ExitCalls);
+        Assert.True(exiting.IsCompletedSuccessfully);
+        Assert.Equal(1, host.Updates.FinalCalls);
+        Assert.Contains(failure, lifetime.Result!.CleanupErrors);
+        Assert.Equal(1, desktop.ExitCalls);
         Assert.True(desktop.Disposed);
         Assert.True(resource.Disposed);
-        Assert.Same(failure, Assert.Throws<IOException>(lifetime.Dispose));
+        lifetime.Dispose();
     }
 
     [Fact]
@@ -177,14 +233,17 @@ public sealed class DesktopApplicationLifetimeTests
         }
     }
 
-    private sealed class TestHost : IHost, IAsyncDisposable
+    private sealed class TestHost : IHost, IAsyncDisposable, IHostedService, IHostShutdownEvidence
     {
         private readonly ServiceProvider _services;
+        public TestUpdates Updates { get; } = new();
+        public DeliveryRemainder Remainder { get; init; } = new(0, 0);
+        public DeliveryRemainder ShutdownRemainder => StopCalls > 0 ? Remainder : DeliveryRemainder.Unknown;
         public int StopCalls { get; private set; }
         public Exception? StopFailure { get; init; }
         public TestHost(YieldingResource resource)
         {
-            _services = new ServiceCollection().AddSingleton(_ => resource).BuildServiceProvider();
+            _services = new ServiceCollection().AddSingleton<HostOperationAdmission>().AddSingleton(new DesktopInstallation(DesktopInstallation.Detached.LoginStart, _ => Updates)).AddSingleton<IHostedService>(this).AddSingleton(_ => resource).BuildServiceProvider();
             _ = _services.GetRequiredService<YieldingResource>();
         }
         public IServiceProvider Services => _services;
@@ -201,17 +260,8 @@ public sealed class DesktopApplicationLifetimeTests
     private sealed class DesktopParticipant : IDesktopApplicationParticipant
     {
         public Action<DesktopExitReason>? OnExit { get; set; }
-        public Exception? StopFailure { get; init; }
-        public DesktopExitReason? PreparationReason { get; private set; }
         public bool Disposed { get; private set; }
-        public int StopCalls { get; private set; }
         public int ExitCalls { get; private set; }
-        public Task PrepareToExitAsync(DesktopExitReason? reason)
-        {
-            StopCalls++;
-            PreparationReason = reason;
-            return StopFailure is null ? Task.CompletedTask : Task.FromException(StopFailure);
-        }
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
         public Task ExitAsync(DesktopExitReason reason)
         {
@@ -219,6 +269,26 @@ public sealed class DesktopApplicationLifetimeTests
             OnExit?.Invoke(reason);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class TestUpdates : IDesktopUpdates
+    {
+        public bool IsSupported => true;
+        public Exception? Failure { get; set; }
+        public int FinalCalls { get; private set; }
+        public DesktopExitReason? Reason { get; private set; }
+        public UpdateSnapshot Current => UpdateSnapshot.Idle;
+        public event Action<UpdateSnapshot>? Changed { add { } remove { } }
+        public Task<UpdateCheckResult> CheckAsync() => Task.FromResult(UpdateCheckResult.Skipped);
+        public Task<bool> ApplyAsync() => Task.FromResult(false);
+        public void Start() { }
+        public void Dispose() { }
+        public Action PrepareExit(DesktopExitReason reason) => () =>
+        {
+            FinalCalls++;
+            Reason = reason;
+            if (Failure is not null) throw Failure;
+        };
     }
 
     private sealed class UiContext : SynchronizationContext, IDisposable

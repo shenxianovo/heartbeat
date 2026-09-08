@@ -3,6 +3,8 @@ using Heartbeat.Collection.Hub.Collectors.Protocol;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using System.Net;
+using Heartbeat.Collection.Hub.Hosting;
+using Heartbeat.Collection.Hub.Upload;
 
 namespace Heartbeat.Collection.Hub.Ingest
 {
@@ -14,8 +16,18 @@ namespace Heartbeat.Collection.Hub.Ingest
     /// </summary>
     public class ExternalHostProtocolWorker(
         IExternalHostProtocolHttpHandler handler,
-        IHubConfiguration configuration) : BackgroundService
+        IHubConfiguration configuration) : BackgroundService, IHostShutdownEvidence
     {
+        // Only our listener/in-flight handler belongs to this process; external outboxes do not.
+        private bool _stopped;
+        public DeliveryRemainder ShutdownRemainder => _stopped ? new(0, 0) : DeliveryRemainder.Unknown;
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
+        {
+            await base.StopAsync(CancellationToken.None);
+            _stopped = true;
+        }
+
         /// <summary>
         /// 端口浮动范围：基准端口被占时向上顺延试绑的端口数。
         /// ExternalHost 侧按同一范围探测 discovery endpoint，两侧约定一致。

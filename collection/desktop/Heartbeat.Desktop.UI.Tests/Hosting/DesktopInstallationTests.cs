@@ -18,7 +18,7 @@ public sealed class DesktopInstallationTests
         Assert.False(updates.IsSupported);
         Assert.Equal(UpdateCheckResult.Skipped, await updates.CheckAsync());
         Assert.False(await updates.ApplyAsync());
-        Assert.False(updates.ScheduleOnExitIfReady());
+        updates.PrepareExit(DesktopExitReason.Quit)();
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using Heartbeat.Collection.Hub.Collectors.Runtime;
 using Heartbeat.Collection.Hub.Collectors.Protocol;
+using Heartbeat.Collection.Hub.Upload;
 
 namespace Heartbeat.Collection.Hub.Collectors.Packages;
 
@@ -65,6 +66,7 @@ public interface ICollectorMarketplace
 
 public interface ICollectorMarketplaceRuntime : ICollectorMarketplace, IAsyncDisposable
 {
+    DeliveryRemainder ShutdownRemainder { get; }
     Task Initialized { get; }
     void Start();
     ValueTask StopAsync(CancellationToken cancellationToken = default);
@@ -124,6 +126,10 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
             host.CreateSubject);
     }
 
+    private bool _stopEvidenceReady;
+    private DeliveryRemainder _retiredRemainder = new(0, 0);
+    public DeliveryRemainder ShutdownRemainder => _stopTask?.IsCompleted == true && _stopEvidenceReady
+        ? _retiredRemainder : DeliveryRemainder.Unknown;
     public Task Initialized => _initialized.Task;
 
     public HostManagementOperation Install(string packageId) => _management.Start(
@@ -427,6 +433,7 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
                     try { await StopManagedAsync(instanceId, CancellationToken.None); }
                     catch (Exception exception) { failures.Add(exception); }
                 }
+                _stopEvidenceReady = _managed.Count == 0;
             }
             finally { _operations.Release(); }
         }
@@ -594,19 +601,28 @@ public sealed class CollectorMarketplaceRuntime : ICollectorMarketplaceRuntime
 
     private async ValueTask StopManagedAsync(Guid collectorInstanceId, CancellationToken cancellationToken)
     {
-        if (!_managed.Remove(collectorInstanceId, out var entry))
+        if (!_managed.TryGetValue(collectorInstanceId, out var entry))
             return;
-        entry.Cancel();
-        await entry.Started.Task.WaitAsync(cancellationToken);
-        if (entry.Activation is not null)
-            await entry.Activation.StopAsync(cancellationToken);
-        if (entry.Task is not null)
+        try
         {
-            try { await entry.Task.WaitAsync(cancellationToken); }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
-            catch when (!cancellationToken.IsCancellationRequested) { }
+            entry.Cancel();
+            await entry.Started.Task.WaitAsync(cancellationToken);
+            if (entry.Activation is not null)
+                await entry.Activation.StopAsync(cancellationToken);
+            if (entry.Task is not null)
+                await entry.Task.WaitAsync(cancellationToken);
         }
-        entry.Dispose();
+        finally
+        {
+            if (entry.Task?.IsCompleted != false && entry.Started.Task.IsCompleted)
+            {
+                var drain = entry.Activation?.ProtocolDrainResult?.LogicalResult;
+                _retiredRemainder += drain is { RemainderDurable: true, PendingFacts: { } facts, PendingGaps: { } gaps }
+                    ? new DeliveryRemainder(facts + gaps, 0) : DeliveryRemainder.Unknown;
+                _managed.Remove(collectorInstanceId);
+                entry.Dispose();
+            }
+        }
     }
 
     private CollectorMarketplaceRuntimeItem Snapshot(

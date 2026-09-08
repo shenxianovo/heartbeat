@@ -1,4 +1,5 @@
 using Heartbeat.Desktop.UI.Hosting;
+using Heartbeat.Collection.Hub.Hosting;
 using Heartbeat.Desktop.Mac.Configuration;
 using Heartbeat.Desktop.Mac;
 using Heartbeat.Desktop.UI.Presentation;
@@ -121,6 +122,33 @@ public sealed class MacDesktopStateTests : IDisposable
 
         Assert.Null(login.EnabledExecutable);
         Assert.Equal(0, login.EnableCount);
+    }
+
+    [Fact]
+    public void ClosedAdmission_RejectsAllDesktopChangesAndPreservesReadableState()
+    {
+        var login = new FakeLoginStart();
+        var accessibility = new FakeAccessibility();
+        var locator = new FakeApplicationLocator();
+        using var platform = Build(login, accessibility, applicationLocator: locator);
+        var admission = new HostOperationAdmission();
+        using var state = new DesktopStateCommands(platform, admission);
+        state.SaveSettings(new("key", "Studio", 5));
+        var settings = state.Current.Settings;
+        DesktopStateSnapshot? observed = null;
+        state.Changed += snapshot => observed = snapshot;
+        admission.Close();
+        Assert.False(observed!.ChangesAccepted);
+        Assert.Throws<InvalidOperationException>(() => state.SaveSettings(new("new", "changed", 2)));
+        Assert.Throws<InvalidOperationException>(() => state.SetLoginStartEnabled(true));
+        Assert.Throws<InvalidOperationException>(() => state.SetThemeMode(DesktopThemeMode.Dark));
+        Assert.Throws<InvalidOperationException>(() => state.SetSystemCapabilityEnabled(SystemCapability.WindowActivity, true));
+        Assert.Throws<InvalidOperationException>(() => state.RecoverSystemCapability(SystemCapability.WindowActivity));
+        Assert.Throws<InvalidOperationException>(() => state.RevealSystemCapabilityApplication(SystemCapability.WindowActivity));
+        Assert.Equal(settings, state.Current.Settings);
+        Assert.False(login.IsEnabled);
+        Assert.False(accessibility.Enabled);
+        Assert.Equal(0, locator.RevealCount);
     }
 
     private MacDesktopState Build(

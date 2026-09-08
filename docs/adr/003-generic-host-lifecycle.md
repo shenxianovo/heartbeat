@@ -31,7 +31,7 @@ Adopted **.NET Generic Host**. The monitoring service implements `IHostedService
 - ⚠️ Heavier startup for what was originally a 50-line console app.
 - ⚠️ Developers must understand the `IHostedService` lifecycle (Start → Run → Stop ordering).
 
-## Desktop shutdown ownership (2026-09-07)
+## Initial desktop shutdown ownership (2026-09-07)
 
 > The implementation described below is the first shutdown-order correction. The follow-up interview
 > has approved revised failure semantics and ownership boundaries in [ADR-052](./052-desktop-exit-intent-and-host-ownership.md).
@@ -82,6 +82,16 @@ Regression tests exercise the shared owner through an actively pumped single-thr
 real DI container with an async disposable that deliberately captures that context. They cover exit
 ordering, repeated quit/restart requests, truthful failure, and abnormal-return cleanup. Platform
 menu/tray behavior and packaged native exit remain separate smoke checks.
+
+## Application admission and final action (Ticket 05)
+
+The application now closes Host command admission immediately and consumes each stopped subtree's
+custody evidence. Durable offline remainder permits exit even if cleanup fails; unknown data blocks
+both the installer and native exit and keeps stopped owners available. Update preparation freezes a
+candidate without launching it. After safe cleanup the application schedules the installer once; a
+scheduling failure is recorded and native exit still proceeds. This supersedes the initial policy
+above that any cleanup exception prevents exit. Recovery interaction remains a separate follow-up in
+[ADR-052](./052-desktop-exit-intent-and-host-ownership.md).
 
 ## References
 

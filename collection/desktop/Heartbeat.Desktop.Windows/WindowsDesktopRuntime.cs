@@ -15,12 +15,14 @@ using Heartbeat.Desktop.Windows.Services;
 using Heartbeat.Collection.Hub.Collectors.Packages;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Heartbeat.Collection.Hub.Hosting;
 
 namespace Heartbeat.Desktop.Windows;
 
 public sealed class WindowsDesktopRuntime : IWindowController, IDesktopApplicationParticipant
 {
     private readonly DesktopApplicationLifetime _application;
+    private readonly WindowsDesktopState _state;
     private IClassicDesktopStyleApplicationLifetime? _lifetime;
     private MainWindow? _window;
     private TrayIcon? _trayIcon;
@@ -33,22 +35,22 @@ public sealed class WindowsDesktopRuntime : IWindowController, IDesktopApplicati
     {
         _application = application;
         LogFeed = logFeed;
-        DesktopState = new WindowsDesktopState(
+        _state = new WindowsDesktopState(
             config,
             host.Services.GetRequiredService<ICollectionStatus>(),
             host.Services.GetRequiredService<IDesktopLoginStart>(),
             host.Services.GetRequiredService<IClientCompatibilityStatus>(),
             host.Services.GetRequiredService<IUploadStatus>(),
             host.Services.GetRequiredService<InputObservationStatus>());
+        DesktopState = new(_state, host.Services.GetRequiredService<HostOperationAdmission>());
         CollectorMarketplace = new DesktopCollectorMarketplace(
             host.Services.GetRequiredService<ICollectorMarketplace>());
-        Updates = host.Services.GetRequiredService<DesktopInstallation>().CreateUpdates(PrepareForUpdateAsync);
         _application.Attach(this);
-        Updates.Start();
+
     }
 
-    public WindowsDesktopState DesktopState { get; }
-    public IDesktopUpdates Updates { get; }
+    public DesktopStateCommands DesktopState { get; }
+    public IDesktopUpdates Updates => _application.Updates;
     public RingBufferSink LogFeed { get; }
     public DesktopCollectorMarketplace CollectorMarketplace { get; }
     public bool IsShutdownPrepared => _application.IsShutdownPrepared;
@@ -80,21 +82,12 @@ public sealed class WindowsDesktopRuntime : IWindowController, IDesktopApplicati
             await clipboard.SetTextAsync(text);
     });
 
-    public Task QuitAsync() => _application.RequestExitAsync(DesktopExitReason.Quit);
-
-    private Task PrepareForUpdateAsync() =>
-        _application.RequestExitAsync(DesktopExitReason.UpdateRestart);
-
-    Task IDesktopApplicationParticipant.PrepareToExitAsync(DesktopExitReason? reason)
-    {
-        if (reason == DesktopExitReason.Quit) Updates.ScheduleOnExitIfReady();
-        return Task.CompletedTask;
-    }
+    public Task QuitAsync() => _application.QuitAsync();
 
     ValueTask IAsyncDisposable.DisposeAsync()
     {
-        Updates.Dispose();
         DesktopState.Dispose();
+        _state.Dispose();
         return ValueTask.CompletedTask;
     }
 

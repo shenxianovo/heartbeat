@@ -39,6 +39,7 @@ public sealed class VelopackUpdateController : IDesktopUpdates
     private IReleaseUpdate? _pending;
     private Task<UpdateCheckResult>? _inflightCheck;
     private bool _isDownloading;
+    private bool _exiting;
     private Timer? _timer;
     private UpdateSnapshot _current = UpdateSnapshot.Idle;
 
@@ -77,7 +78,7 @@ public sealed class VelopackUpdateController : IDesktopUpdates
         TaskCompletionSource<UpdateCheckResult> completion;
         lock (_gate)
         {
-            if (_current.State is UpdateState.Downloading or UpdateState.ReadyToApply)
+            if (_exiting || _current.State is UpdateState.Downloading or UpdateState.ReadyToApply)
                 return Task.FromResult(UpdateCheckResult.Skipped);
             if (_inflightCheck != null) return _inflightCheck;
 
@@ -127,7 +128,7 @@ public sealed class VelopackUpdateController : IDesktopUpdates
         IReleaseUpdate release;
         lock (_gate)
         {
-            if (_current.State != UpdateState.UpdateAvailable || _isDownloading || _pending == null) return;
+            if (_exiting || _current.State != UpdateState.UpdateAvailable || _isDownloading || _pending == null) return;
             _isDownloading = true;
             release = _pending;
         }
@@ -177,52 +178,37 @@ public sealed class VelopackUpdateController : IDesktopUpdates
 
     public async Task<bool> ApplyAsync()
     {
-        IReleaseUpdate? pending;
         lock (_gate)
-        {
-            if (_current.State != UpdateState.ReadyToApply || _pending == null) return false;
-            pending = _pending;
-        }
-
-        try
-        {
-            _client.ScheduleUpdateAndRestart(pending);
-        }
-        catch (Exception exception)
-        {
-            Log.Error(exception, "启动 Update 应用进程失败");
-            Publish(Current with { Error = "应用更新失败，请重试。" });
-            return false;
-        }
-
+            if (_current.State != UpdateState.ReadyToApply || _pending is null) return false;
+        // The application owns acceptance and the one final action; a button cannot launch an installer.
         await _prepareForRestart();
         return true;
     }
 
-    public bool ScheduleOnExitIfReady()
+    public Action PrepareExit(DesktopExitReason reason)
     {
         IReleaseUpdate? pending;
         lock (_gate)
         {
-            if (_current.State != UpdateState.ReadyToApply || _pending == null) return false;
-            pending = _pending;
+            _exiting = true;
+            pending = _current.State == UpdateState.ReadyToApply ? _pending : null;
         }
-
-        try
+        _timer?.Dispose();
+        return () =>
         {
-            _client.ScheduleUpdateAndExit(pending);
-            return true;
-        }
-        catch (Exception exception)
-        {
-            Log.Error(exception, "启动静默 Update 应用进程失败");
-            return false;
-        }
+            if (pending is null) return;
+            if (reason == DesktopExitReason.UpdateRestart) _client.ScheduleUpdateAndRestart(pending);
+            else _client.ScheduleUpdateAndExit(pending);
+        };
     }
 
     private void Publish(UpdateSnapshot snapshot)
     {
-        lock (_gate) _current = snapshot;
+        lock (_gate)
+        {
+            if (_exiting) return;
+            _current = snapshot;
+        }
         Changed?.Invoke(snapshot);
     }
 

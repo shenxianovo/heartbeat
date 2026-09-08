@@ -80,6 +80,7 @@ public sealed record DesktopStateSnapshot(
     DesktopCapabilitySnapshot Capabilities)
 {
     public bool LoginStartSupported { get; init; } = true;
+    public bool ChangesAccepted { get; init; } = true;
 
     public static DesktopStateSnapshot Empty { get; } = new(
         null,

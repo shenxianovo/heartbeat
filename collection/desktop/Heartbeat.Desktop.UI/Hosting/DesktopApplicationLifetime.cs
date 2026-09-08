@@ -1,4 +1,7 @@
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Heartbeat.Collection.Hub.Hosting;
+using Heartbeat.Collection.Hub.Upload;
 
 namespace Heartbeat.Desktop.UI.Hosting;
 
@@ -8,11 +11,19 @@ public enum DesktopExitReason
     UpdateRestart
 }
 
+public sealed record DesktopDeliveryEvidence(string Owner, DeliveryRemainder Remainder);
+
+public sealed record DesktopExitResult(
+    IReadOnlyList<DesktopDeliveryEvidence> Delivery,
+    IReadOnlyList<Exception> CleanupErrors,
+    Exception? FinalActionError = null)
+{
+    public bool IsDataSafe => Delivery.Count > 0 && Delivery.All(item => item.Remainder.IsDurable);
+}
+
 /// <summary>The platform-owned resources that share the desktop Host's lifetime.</summary>
 public interface IDesktopApplicationParticipant : IAsyncDisposable
 {
-    // Runs after hosted services stop and before desktop resources are disposed.
-    Task PrepareToExitAsync(DesktopExitReason? reason);
     Task ExitAsync(DesktopExitReason reason);
 }
 
@@ -23,10 +34,18 @@ public interface IDesktopApplicationParticipant : IAsyncDisposable
 public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
 {
     private readonly object _gate = new();
+    private readonly HostOperationAdmission _admission = host.Services.GetRequiredService<HostOperationAdmission>();
     private IDesktopApplicationParticipant? _desktop;
     private Task? _cleanup;
     private Task? _exit;
+    private DesktopExitReason? _reason;
     private bool _exitAuthorized;
+    private readonly IHostShutdownEvidence[] _evidence = host.Services.GetServices<IHostedService>()
+        .OfType<IHostShutdownEvidence>().ToArray();
+
+    public IDesktopUpdates Updates { get; private set; } = null!;
+
+    public DesktopExitResult? Result { get; private set; }
 
     public bool IsShutdownPrepared
     {
@@ -41,29 +60,58 @@ public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
             if (_desktop is not null || _cleanup is not null)
                 throw new InvalidOperationException("The desktop lifetime is already attached or stopping.");
             _desktop = desktop;
+            Updates = host.Services.GetRequiredService<DesktopInstallation>()
+                .CreateUpdates(() => RequestExitAsync(DesktopExitReason.UpdateRestart));
         }
+        Updates.Start();
     }
 
     /// <summary>Called from the running desktop UI thread, including native shutdown callbacks.</summary>
     public Task RequestExitAsync(DesktopExitReason reason)
     {
+        _admission.Close();
         TaskCompletionSource completion;
         lock (_gate)
         {
-            if (_exit is not null) return _exit;
+            if (_exit is not null)
+            {
+                if (_reason != reason)
+                    throw new InvalidOperationException($"Desktop exit intent is already fixed as {_reason}.");
+                return _exit;
+            }
             if (_desktop is null) throw new InvalidOperationException("No desktop is attached.");
             completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _exit = completion.Task;
+            _reason = reason;
         }
         _ = CompleteExitAsync(reason, completion);
         return completion.Task;
+    }
+
+    /// <summary>Native async event handlers must not turn a refused exit into an unhandled exception.</summary>
+    public async Task QuitAsync()
+    {
+        try { await RequestExitAsync(DesktopExitReason.Quit); }
+        catch (Exception exception) { Serilog.Log.Warning(exception, "退出请求未完成，保留当前退出结果"); }
     }
 
     private async Task CompleteExitAsync(DesktopExitReason reason, TaskCompletionSource completion)
     {
         try
         {
+            var finalAction = Updates.PrepareExit(reason);
             await CleanupAsync(reason);
+            if (Result?.IsDataSafe != true)
+            {
+                Serilog.Log.Error("退出被阻止：数据保管结果 {@Delivery}，收尾错误 {@Errors}", Result?.Delivery, Result?.CleanupErrors);
+                throw new InvalidOperationException("Cannot confirm local data persistence; automatic exit is blocked.");
+            }
+            try { finalAction(); }
+            catch (Exception exception)
+            {
+                Result = Result with { FinalActionError = exception };
+                Serilog.Log.Error(exception, "最终动作失败，数据已安全保管，继续退出");
+            }
             lock (_gate) _exitAuthorized = true;
             // Only this final callback may end the UI loop. Do not require a UI continuation after it.
             await _desktop!.ExitAsync(reason).ConfigureAwait(false);
@@ -95,11 +143,30 @@ public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
         var failures = new List<Exception>();
         Serilog.Log.Information("正在停止 Heartbeat Agent...");
         await AttemptAsync(() => new ValueTask(host.StopAsync()));
-        // Platform preparation may schedule an update. A failed stop must not initiate it.
-        if (_desktop is not null && failures.Count == 0)
-            await AttemptAsync(() => new ValueTask(_desktop.PrepareToExitAsync(reason)));
+        if (reason is not null)
+        {
+            var delivery = _evidence.Select(source =>
+            {
+                try { return new DesktopDeliveryEvidence(source.GetType().Name, source.ShutdownRemainder); }
+                catch (Exception exception)
+                {
+                    failures.Add(exception);
+                    return new DesktopDeliveryEvidence(source.GetType().Name, DeliveryRemainder.Unknown);
+                }
+            }).ToArray();
+            Result = new(delivery, failures.ToArray());
+            if (!Result.IsDataSafe)
+            {
+                // Keep the stopped owners and their data available; recovery is a separate policy.
+                completion.SetResult();
+                return;
+            }
+        }
         if (_desktop is not null)
+        {
             await AttemptAsync(_desktop.DisposeAsync);
+            await AttemptAsync(() => { Updates.Dispose(); return ValueTask.CompletedTask; });
+        }
         await AttemptAsync(() =>
         {
             if (host is IAsyncDisposable asynchronous) return asynchronous.DisposeAsync();
@@ -107,7 +174,9 @@ public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
             return ValueTask.CompletedTask;
         });
 
-        if (failures.Count == 0) completion.SetResult();
+        if (Result is not null) Result = Result with { CleanupErrors = failures.ToArray() };
+        foreach (var failure in failures) Serilog.Log.Error(failure, "Heartbeat 清理失败");
+        if (reason is not null || failures.Count == 0) completion.SetResult();
         else completion.SetException(failures.Count == 1 ? failures[0] : new AggregateException(failures));
 
         async Task AttemptAsync(Func<ValueTask> action)

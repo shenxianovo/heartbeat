@@ -88,6 +88,15 @@ public sealed class CollectorMarketplaceHostTests
             Assert.Empty(host.Services.GetRequiredService<ICollectorMarketplace>().InstalledSnapshot());
             Assert.Throws<InvalidOperationException>(() => host.Services
                 .GetRequiredService<ICollectorMarketplaceHostAdapter>().CreateSubject(SubjectKind.Machine));
+            // Application exit can close admission before the Generic Host starts stopping.
+            host.Services.GetRequiredService<HostOperationAdmission>().Close();
+            var management = host.Services.GetRequiredService<ICollectorMarketplace>();
+            Assert.Throws<InvalidOperationException>(() => management.Install("missing"));
+            Assert.Throws<InvalidOperationException>(() => management.Retry("missing"));
+            Assert.Throws<InvalidOperationException>(() => management.Uninstall("missing"));
+            Assert.Throws<InvalidOperationException>(() => management.SubmitAuthorization(Guid.NewGuid(), Guid.NewGuid(),
+                new Dictionary<string, string>()));
+            Assert.Empty(management.OperationsSnapshot());
             await host.StopAsync();
             await Assert.ThrowsAsync<InvalidOperationException>(() => host.Services
                 .GetRequiredService<ICollectorMarketplace>().BrowseAsync().AsTask());
@@ -132,6 +141,7 @@ public sealed class CollectorMarketplaceHostTests
         public TaskCompletionSource AllowDispose { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Starts { get; private set; }
         public int Disposals { get; private set; }
+        public Heartbeat.Collection.Hub.Upload.DeliveryRemainder ShutdownRemainder => new(0, 0);
         public Task Initialized => Task.CompletedTask;
         public void Start() => Starts++;
         public ValueTask StopAsync(CancellationToken token = default)

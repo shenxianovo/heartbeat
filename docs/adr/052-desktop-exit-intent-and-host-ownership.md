@@ -133,6 +133,9 @@ Management Operation owner 取消安全阶段并等待提交完成。相同退�
 和明确结果，不销毁其数据资源，也不重新打开接纳。原生 UI 入口接住失败，避免用未处理异常意外退出。
 更新的准备仅固定当时已就绪的候选；晚到下载不会改变已固定的最终动作。平台上的重复更新编排已删除。
 
+自动验证：全量 .NET 1,188/1,188 通过，双轴复审各 0 项未解决。观察者通知异常不会中断退出；
+再次 Install 与 Retry 都保留旧 Activation 未知证据，不用新 Activation 的空余量覆盖旧责任。
+
 退出恢复交互、期限和打包更新的真实安装验收由
 `.scratch/runtime-ownership/issues/06-exit-recovery-and-native-verification.md` 明确承接。
 

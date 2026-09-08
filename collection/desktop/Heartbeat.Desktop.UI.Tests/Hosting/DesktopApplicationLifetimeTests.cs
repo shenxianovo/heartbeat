@@ -91,15 +91,17 @@ public sealed class DesktopApplicationLifetimeTests
         lifetime.Attach(desktop);
         var admission = host.Services.GetRequiredService<HostOperationAdmission>();
         var observed = false;
+        Exception? conflict = null;
         admission.Closed += () => throw new IOException("UI observer failed");
         admission.Closed += () =>
         {
             observed = true;
-            Assert.Throws<InvalidOperationException>(() => { _ = lifetime.RequestExitAsync(DesktopExitReason.UpdateRestart); });
+            conflict = Record.Exception(() => { _ = lifetime.RequestExitAsync(DesktopExitReason.UpdateRestart); });
         };
         var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
         ui.RunUntil(exiting);
         Assert.True(observed);
+        Assert.IsType<InvalidOperationException>(conflict);
         Assert.True(exiting.IsCompletedSuccessfully);
         Assert.Equal(DesktopExitReason.Quit, host.Updates.Reason);
         Assert.Equal(1, host.StopCalls);

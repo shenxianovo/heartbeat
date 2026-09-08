@@ -6,7 +6,9 @@ namespace Heartbeat.Verification.Tests;
 
 public sealed class DesktopProfileTests : IDisposable
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "heartbeat-profiles-" + Guid.NewGuid().ToString("N"));
+    private readonly string _root = Path.Combine(
+        Environment.GetEnvironmentVariable("HEARTBEAT_PROFILE_TEST_ROOT") ?? Path.GetTempPath(),
+        "heartbeat-profiles-" + Guid.NewGuid().ToString("N"));
     private readonly List<Process> _processes = [];
     private readonly string _mutex = "heartbeat-profile-test-" + Guid.NewGuid().ToString("N");
 
@@ -49,6 +51,7 @@ public sealed class DesktopProfileTests : IDisposable
     {
         using var bootstrap = new DesktopBootstrap(["--data-directory", Path.Combine(_root, "default", ".")],
             Path.Combine(_root, "default"));
+        Assert.True(bootstrap.TryAcquire(_mutex));
         Assert.True(bootstrap.UsesDefaultDirectory);
         Assert.False(bootstrap.AllowsInstallationBinding);
         Assert.Throws<ArgumentException>(() => new DesktopBootstrap(["--data-directory"], _root));
@@ -62,6 +65,29 @@ public sealed class DesktopProfileTests : IDisposable
         Assert.Equal(aliasExists ? "occupied" : "acquired", await Read(await Start("mixedcase")));
     }
 
+    [Fact]
+    public async Task DefaultDirectoryCaseComparisonFollowsTheFilesystem()
+    {
+        Assert.Equal("acquired", await Read(await Start("Default", defaultName: "Default")));
+        var sameDirectory = Directory.Exists(Path.Combine(_root, "default"));
+        Assert.Equal(sameDirectory ? "occupied" : "acquired",
+            await Read(await Start("default", defaultName: "Default")));
+        // Whichever spelling is used, the actual default still retains the legacy mutex.
+        Assert.Equal("occupied", await Read(await Start("other", defaultName: "other")));
+    }
+
+    [Fact]
+    public async Task DefaultCaseAliasRetainsLegacyProtectionOnlyForTheSameDirectory()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "Default"));
+        var sameDirectory = Directory.Exists(Path.Combine(_root, "default"));
+        // Hold only the shared legacy mutex relative to the directory under test.
+        Assert.Equal("acquired", await Read(await Start("legacy-holder", defaultName: "legacy-holder")));
+        Assert.Equal(sameDirectory ? "occupied" : "acquired",
+            await Read(await Start("default", defaultName: "Default")));
+        Assert.Empty(Directory.EnumerateFiles(_root, ".desktop-identity-*", SearchOption.AllDirectories));
+    }
+
     [UnixFact]
     public void DefaultDirectorySymlinkRetainsLegacyProtection()
     {
@@ -69,6 +95,7 @@ public sealed class DesktopProfileTests : IDisposable
         Directory.CreateSymbolicLink(Path.Combine(_root, "alias"), Path.Combine(_root, "default"));
         using var bootstrap = new DesktopBootstrap(["--data-directory", Path.Combine(_root, "alias")],
             Path.Combine(_root, "default"));
+        Assert.True(bootstrap.TryAcquire(_mutex));
         Assert.True(bootstrap.UsesDefaultDirectory);
         Assert.False(bootstrap.AllowsInstallationBinding);
     }

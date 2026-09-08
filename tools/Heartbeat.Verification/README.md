@@ -89,16 +89,29 @@ Machine UUID，再准备 Machine Reference Instance；随后运行正常 Desktop
 输入采集关闭，自启动和更新能力不可用。上传周期沿用正式配置的最小一分钟，通常需要约一分钟
 才能确认交付，不使用测试专用上传通道。已安装日常客户端可以继续运行。
 
+制品验收分为验证器准备和执行两步。准备时需要可编译的源码，验证器的 ProjectReference
+也会构建 Analytics/Headless；准备完成后保存整个输出目录。执行时直接启动已构建的 DLL，
+不通过 `dotnet run`/MSBuild。即使待测服务源码此时不可编译，已指定的制品仍可独立验收。
+
 ```bash
+# 一次性准备验证器；这是构建步骤，不属于制品执行
+dotnet publish tools/Heartbeat.Verification -c Release -o .local/verification-runner
+
 # 对实际解包的 Release .app 做相同验收；desktop 不执行 publish
-dotnet run --project tools/Heartbeat.Verification -- run desktop-main \
+dotnet .local/verification-runner/Heartbeat.Verification.dll run desktop-main \
   --artifact desktop=/absolute/path/Heartbeat.app
 
 # 也可指定某个或全部服务的现有制品
-dotnet run --project tools/Heartbeat.Verification -- run headless-main \
+dotnet .local/verification-runner/Heartbeat.Verification.dll run headless-main \
   --artifact analytics=/absolute/path/analytics/Heartbeat.Server.dll \
-  --artifact headless=/absolute/path/headless/Heartbeat.Collection.Headless.dll
+  --artifact headless=/absolute/path/headless/Heartbeat.Collection.Headless.dll \
+  --artifact reference=/absolute/path/reference/Heartbeat.Collector.Reference.ManagedProcess
 ```
+
+未指定的服务仍从源码 publish；完全跳过服务源码构建时，须指定本场景的全部三个制品。
+执行目录仍需在仓库内以定位报告目录；预构建验证器和制品均可位于仓库外。
+`VerificationEntryTests` 通过实际 `dotnet <DLL> run ... --artifact ...` 入口，使用不可解析的
+服务项目验证制品选择，停在缺失 Reference 制品的明确阻塞，避免单元回归访问线上 Auth。
 
 `--artifact` 可重复，服务名为 `analytics`、`headless`、`desktop`、`reference`；只接受本场景
 使用的服务。PATH 指向可执行文件/DLL，Desktop 也接受 `.app`。报告记录原路径、版本和整个

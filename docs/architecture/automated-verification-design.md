@@ -1,6 +1,9 @@
 # 主链路自动验收设计
 
-状态：首版已实施并完成 macOS 真实链路验收（2026-09-07）。覆盖 Reference → Headless → Analytics；Desktop、其他服务组合与服务内部检查仍是后续接入项。
+状态：Headless 与 Desktop 主链路已实施，2026-09-07 已有 macOS 源码及打包 `.app` 的真实链路证据。
+覆盖 Reference → Headless/Desktop → Analytics；其他服务组合、服务内部检查与 CI 尚未接入。
+Windows 原生、Setup/升级、自启动和操作系统权限仍待设备验收；长期无响应网络下的 Desktop
+退出问题仍未解决，TCP reset 演练不覆盖该问题。历史制品证据与后续修复提交的验证分开记录。
 
 ## 已确认目标（2026-09-07）
 
@@ -9,7 +12,7 @@
 - 第一版选择最小且覆盖面尽可能广的一条链路。后续能够接入服务内部检查与不同服务组合；实现时保持环境编排与场景检查分离。
 - 固定回归由可重复的程序执行和断言。AI Agent 负责调用、分析失败和探索补充；探索发现的稳定场景可以转成固定回归。
 - 第一版范围已确认：从已安装的 Reference ManagedProcess Collector 开始，启动真实 Headless Hub 与 Analytics，通过 Analytics 查询 API 核对指定 Fact。Dashboard 展示不在首版链路内。
-- Desktop 是明确的后续接入项，不因 Headless 通过而视为完成。后续还需能够添加服务内部检查、其他 Collector 和服务组合。
+- 当时将 Desktop 定为首版之后的接入项；现已独立实现并取得下文 macOS 验收证据，不由 Headless 通过推定。服务内部检查、其他 Collector 和服务组合仍未接入。
 - 采用验证泳道：待测的 Heartbeat 服务及其数据在隔离环境内相互通信，外部 Auth 继续使用线上服务。Auth 自身不是待测对象，不建设测试 Auth，也不为本任务改造 Auth 地址配置。
 - 从已安装状态开始；准备工作复用正式 Package Installation 与 Runtime API 建立隔离状态。Registry 下载、安装管理 API 与发布流程不进入首版验收范围。
 - 默认每次运行创建独立泳道，结束后回收本次进程与数据，保留报告和日志；排障时可显式保留环境。
@@ -62,7 +65,7 @@
 2. 接入真实 Collector → Headless → Analytics 数据链路及查询断言，生成统一报告。
 3. 验证正常运行可重复通过，断链、依赖阻塞和超时不会假通过，失败仍保留证据并执行清理；记录一条可直接复跑的命令。
 
-首版完成需要真实执行上述链路的证据，只有新增脚本或各层测试通过不算完成。Desktop 为明确的下一条宿主场景；届时处理 Machine Subject、真实宿主隔离和原生能力边界。服务内部检查、其他组合与 CI 复用入口逐步接入。
+首版完成需要真实执行上述链路的证据，只有新增脚本或各层测试通过不算完成。Desktop 后续已作为第二条宿主场景实现，处理 Machine Subject、真实宿主隔离和原生能力边界，证据见下文。服务内部检查、其他组合与 CI 尚未接入。
 
 ## 运行代码实施方案
 
@@ -109,6 +112,11 @@ Reference 通过现有 apphost 的 `--create-package` 创建当前平台 Package
 旧版 Mutex。Windows 原有“创建锁失败仍继续”的路径已经移除。竞争返回 3，锁创建错误以异常
 停止；启动 smoke 竞争仍报告 inconclusive 并返回 1。
 
+取得目录锁后才判断是否需要旧 Mutex。路径相同时直接识别；路径不同时，在已锁定的 Profile
+创建自动删除的随机临时文件，确认该文件是否也能从默认目录访问。该文件只用于核实实际目录
+身份，互斥始终由 `.desktop.lock` 承担；不向无关默认目录写入，也不按操作系统猜测卷的大小写
+规则。因此大小写敏感卷上的独立目录可并行，指向同一实际目录的别名仍保留旧版保护。
+
 `--data-directory PATH` 是普通启动参数，既可用于持久开发目录，也可用于一次验收。目录内仍用
 现有 config.json、Collector Package/Runtime、缓存和日志布局；Analytics 地址继续通过
 `HEARTBEAT_API_BASE_URL` 提供，ExternalHost 监听沿用 config.json 的 `ingestPort`。首条
@@ -132,10 +140,14 @@ Reference 包可以生成 Account/Machine 两个版本，声明与协议客户�
 的 `reference.account` Source/标题保留为既有测试事实，不用它推断 Subject。身份断言单独验证
 Desktop 的真实 Machine UUID，Headless 则验证 Account 的服务端映射。
 
-每个服务可用 `--artifact SERVICE=PATH` 指定已有制品，跳过对应 publish，支持 Desktop `.app`
+验证器先独立 publish 到 `.local/verification-runner`；此准备步骤仍构建其源码依赖。制品执行
+使用 `dotnet .local/verification-runner/Heartbeat.Verification.dll run ...`，不调用 MSBuild，
+不要求已指定服务的源码能够编译。每个服务可用 `--artifact SERVICE=PATH` 指定已有制品，跳过对应 publish，支持 Desktop `.app`
 或可执行文件，以及 Analytics/Headless DLL。`VerificationArtifact` 解析制品并记录版本和整个
 目录的内容 hash，随后使用相同准备和运行阶段。指定制品不复制、不重新构建，也不安装到日常
-使用位置。Release workflow 可在既有解包步骤后调用这一入口，不改变独立发布单元。
+使用位置。未指定的服务仍从源码 publish；完全使用制品时需指定全部三个服务。`dotnet run`
+仅用于源码开发，不能作为跳过源码构建的制品执行入口。Release workflow 可在既有解包步骤后
+调用预构建验证器，不改变独立发布单元；本次不接入 CI。
 
 Desktop 场景确认 UI 已运行且安装能力均关闭，退出后单独断言 Desktop 返回 0，再回收进程组和
 数据库；保留脱敏后的 Desktop 文件日志。清理失败会保留现场并返回非零。主链路通过不表示

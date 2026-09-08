@@ -10,12 +10,16 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
 {
     Console.WriteLine("""
         Heartbeat real-process verification
-        dotnet run --project tools/Heartbeat.Verification -- run <headless-main|desktop-main> [options]
+        Prepare runner (builds its source dependencies once):
+          dotnet publish tools/Heartbeat.Verification -c Release -o .local/verification-runner
+        Execute prepared runner (no MSBuild):
+          dotnet .local/verification-runner/Heartbeat.Verification.dll run <headless-main|desktop-main> [options]
 
           --config PATH             Existing Headless config (default: .local/heartbeat-headless.json).
                                     Only apiKey and management settings are read; its data is never used.
           --artifact SERVICE=PATH   Use existing analytics/headless/desktop/reference binary (Desktop also accepts .app).
-                                    The selected service is not rebuilt; report includes version and tree hash.
+                                    Skips that service's publish. Use the prepared runner to avoid source builds.
+                                    Report includes version and tree hash; omitted services are published from source.
           --timeout-seconds N       Per-stage runtime deadline (default: 120; builds: 600).
           --keep                    Keep the lane alive after the result until Ctrl+C, then clean up.
           --fault disconnect-upload Deliberately disconnect Hub upload; this run MUST fail.

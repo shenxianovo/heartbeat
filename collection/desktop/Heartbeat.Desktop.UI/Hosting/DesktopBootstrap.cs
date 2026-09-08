@@ -8,11 +8,13 @@ public sealed class DesktopBootstrap : IDisposable
     private FileStream? _ownership;
     private Mutex? _legacy;
     private readonly DesktopStartupSmoke.Lifecycle? _smokeLifecycle;
+    private readonly string _defaultDirectory;
 
     public string DataDirectory { get; }
     public DesktopStartupSmoke.Request? Smoke { get; }
     public bool AllowsInstallationBinding { get; }
-    public bool UsesDefaultDirectory { get; }
+    /// <summary>Determined after acquiring the directory lock, using the filesystem itself.</summary>
+    public bool UsesDefaultDirectory { get; private set; }
 
     public DesktopBootstrap(string[] args, string defaultDirectory)
     {
@@ -28,8 +30,7 @@ public sealed class DesktopBootstrap : IDisposable
         if (Smoke is not null && explicitDirectory is not null)
             throw new ArgumentException("Use either --data-directory or --verify-startup-data-directory.");
         DataDirectory = ResolveDirectory(explicitDirectory ?? Smoke?.DataDirectory ?? defaultDirectory);
-        UsesDefaultDirectory = string.Equals(DataDirectory, ResolveDirectory(defaultDirectory),
-            OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
+        _defaultDirectory = ResolveDirectory(defaultDirectory);
         AllowsInstallationBinding = explicitDirectory is null && Smoke is null;
         _smokeLifecycle = Smoke is null ? null : DesktopStartupSmoke.BeginLifecycle(Smoke);
 
@@ -54,6 +55,7 @@ public sealed class DesktopBootstrap : IDisposable
             : exception.HResult == (OperatingSystem.IsMacOS() ? 35 : 11)) { return false; }
         try
         {
+            UsesDefaultDirectory = IsDefaultDirectory();
             if (!UsesDefaultDirectory) return true;
             bool created;
             _legacy = OperatingSystem.IsWindows()
@@ -73,6 +75,21 @@ public sealed class DesktopBootstrap : IDisposable
             _ownership = null;
             throw; // Failure to establish ownership must never allow startup.
         }
+    }
+
+    private bool IsDefaultDirectory()
+    {
+        if (string.Equals(DataDirectory, _defaultDirectory, StringComparison.Ordinal)) return true;
+        if (!Directory.Exists(_defaultDirectory)) return false;
+
+        // A unique entry visible through both paths proves they name the same directory.
+        // This respects per-volume/per-directory case rules, Unicode aliases and short paths
+        // without writing into an unrelated default Profile or guessing from the OS name.
+        // The probe is only an identity witness; .desktop.lock remains the ownership lock.
+        var name = ".desktop-identity-" + Guid.NewGuid().ToString("N");
+        using var probe = new FileStream(Path.Combine(DataDirectory, name), FileMode.CreateNew,
+            FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.DeleteOnClose);
+        return File.Exists(Path.Combine(_defaultDirectory, name));
     }
 
     internal static string ResolveDirectory(string path)

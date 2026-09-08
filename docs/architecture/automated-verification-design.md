@@ -165,6 +165,69 @@ Setup、自启动、权限授权或 vA→vB 更新已验收，仍需各平台真
 
 上述真实链路平台均为 macOS。`.app` 使用现有发布参数在本机打包，仅在独立目录执行，未安装或发布。Setup、真实权限、自启动注册和 vA→vB 更新仍待各自设备验收。
 
+## P2 修复后的干净提交验收（2026-09-08）
+
+本轮验收来源是本地分支 `codex/profile-verification-closeout` 的代码提交
+`c376315ae6e486ea9ddfa28c7421d1c528afdb6e`，Git tree 为
+`23262b287a756f27e739ec69127b42faedf6a9c3`。代码先提交，再从干净工作树 publish
+验证器、Analytics、Headless、Reference 和 macOS Desktop，并用现有 Velopack 参数打包、解包
+到隔离目录。每条构建、打包及运行命令前检查 HEAD 和工作树，命令后记录工作树状态；全部为空。
+本节属于验收完成后的独立、仅文档提交，不是被测制品的源码提交。版本与目录 hash 只是制品身份，
+源码关联由上述 Git 状态和实际构建命令共同证明，不能仅从版本号推定。
+
+机器证据根目录为本 worktree 的 `.local/p2-closeout/`，其中 `provenance.json` 保存完整命令、
+工作目录、时间、退出码、前后 Git 状态及报告路径；每条命令另存同名 `.log`。
+真实运行均使用独立 PostgreSQL、Analytics、Profile/数据目录和线上 Auth；没有安装、发布制品，
+也没有修改主工作树或操作日常已安装客户端。
+
+| 场景 | Run ID | 结果 / 验证器退出码 | 清理 |
+| --- | --- | --- | --- |
+| 当前提交源码 Desktop | `20260908t003940-57cb3593` | passed / 0 | passed |
+| 打包 `.app` 第一次 | `20260908t004059-4109ad3a` | passed / 0 | passed |
+| 同一 `.app` 第二次 | `20260908t004214-c9bdc6d0` | passed / 0 | passed |
+| 同一 `.app` TCP reset | `20260908t004325-00487ab7` | delivery 90 秒超时，预期 failed / 1 | passed |
+| 源码不可构建时使用全部已有制品运行 Headless | `20260908t004507-f36b490e` | passed / 0 | passed |
+
+前四项报告位于 `.local/verification/<run-id>/report.json`；最后一项位于
+`.local/p2-closeout/broken-source/.local/verification/<run-id>/report.json`。
+四次 Desktop 均记录原生 UI ready、安装能力 detached、正常退出码 0；三次无故障运行验证
+Machine subject 映射，Headless 验证 Account subject 映射。TCP reset 不表示 delivery 成功，
+也不覆盖长期无响应的网络黑洞。
+
+源码 Desktop 版本为 `1.0.0+c376315ae6e486ea9ddfa28c7421d1c528afdb6e`，目录 hash 为
+`sha256:d67bd6c731c5d3d6c113613a720cd37f207f019badfacbab3d5ccc0fb21696f6`。
+三次打包制品运行使用 `.local/p2-closeout/artifacts/app/Heartbeat.app`，版本均为
+`0.0.2-p2.1+c376315ae6e486ea9ddfa28c7421d1c528afdb6e`，目录 hash 均为
+`sha256:78c0ce5c1346c186d53caa30d43598512431032af9c5c1319ace288f4d70e835`。
+Analytics、Headless、Reference 的路径、版本及目录 hash 同样保存在 provenance 和对应报告。
+源码泳道 publish 的临时制品随 work 清理；打包制品和预构建验证器保留在隔离 artifacts 目录。
+
+最后一项从独立临时仓库启动预构建 `Heartbeat.Verification.dll`，同时显式指定
+Analytics、Headless、Reference 三个制品。该仓库两个服务项目均为故意损坏的 XML；分别执行
+真实 `dotnet build` 得到 `MSB4025` 和退出码 1，之后真实 Headless 链路仍通过。全部已有制品的
+四次运行都没有服务 `build-*` 日志，证明制品执行入口未触发服务源码构建；验证器准备步骤仍会
+构建自身源码依赖。
+
+回归与独立审查：
+
+- 大小写敏感 APFS 临时卷先复现原实现误判（预期 acquired，实际 occupied），修复后 Profile
+  测试 9/9；普通卷最终验证器测试 22/22，含跨进程别名/旧 Mutex 保护及真实 CLI 入口边界。
+  日志分别为 `profile-red.log`、`profile-sensitive-green.log`、`verification-tests.log`。
+  敏感卷通过 `HEARTBEAT_PROFILE_TEST_ROOT` 指向隔离挂载点；临时卷已卸载，镜像已删除。
+- 最终 solution build 为 0 warning / 0 error；IDE1006 命名检查通过，见 `final-build.log`、
+  `naming.log`。Standards 与 Spec 两个独立审查均无新增 actionable finding。
+- 全量测试运行时为 1182 passed / 2 failed（当时验证器 21 项；随后新增旧 Mutex 边界测试并
+  单独重跑验证器至 22/22），不能标记全量通过。见 `full-tests-docker.log`：两个失败均在
+  `VRChatPackageBuildScriptTests` 查找仓库根时抛出 `DirectoryNotFoundException`；其
+  `Directory.Exists(".git")` 无法识别 worktree 的 `.git` 文件。该既有、范围外测试入口问题
+  未在本轮修改，后续应修正 worktree 根识别并重跑这两项。
+- `evidence-check.json` 记录对本轮 98 份日志/JSON 的程序内扫描：未发现所用 API key 或 JWT；
+  五条泳道的 work、容器及记录的进程均无残留。检查不输出凭据内容。
+
+本轮只关闭上述三个 P2：Profile 身份判断、预构建入口说明与验证、Desktop 实施状态文档。
+长期无响应网络下的退出问题仍未解决；Windows 原生设备、Setup、真实权限、自启动注册、
+vA→vB 更新及 CI 接入均不由本轮结果推定完成，也未扩展 P3 抽象重构。
+
 ## 现有架构约束
 
 遵循 ADR-048/049：Desktop 与 Headless 共享 Runtime，但保留真实宿主差异；通用宿主不认识具名可选 Collector。验收场景不能为方便测试把参考采集器写死进宿主组合。

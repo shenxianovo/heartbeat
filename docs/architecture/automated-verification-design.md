@@ -220,13 +220,25 @@ Analytics、Headless、Reference 三个制品。该仓库两个服务项目均�
   单独重跑验证器至 22/22），不能标记全量通过。见 `full-tests-docker.log`：两个失败均在
   `VRChatPackageBuildScriptTests` 查找仓库根时抛出 `DirectoryNotFoundException`；其
   `Directory.Exists(".git")` 无法识别 worktree 的 `.git` 文件。该既有、范围外测试入口问题
-  未在本轮修改，后续应修正 worktree 根识别并重跑这两项。
+  未在本轮修改；后续修复与回归结果见下方补记。
 - `evidence-check.json` 记录对本轮 98 份日志/JSON 的程序内扫描：未发现所用 API key 或 JWT；
   五条泳道的 work、容器及记录的进程均无残留。检查不输出凭据内容。
 
 本轮只关闭上述三个 P2：Profile 身份判断、预构建入口说明与验证、Desktop 实施状态文档。
 长期无响应网络下的退出问题仍未解决；Windows 原生设备、Setup、真实权限、自启动注册、
 vA→vB 更新及 CI 接入均不由本轮结果推定完成，也未扩展 P3 抽象重构。
+
+### Worktree 测试入口修复补记（2026-09-08）
+
+在 `9058e9a0eb2ddbe18572151663a495ddcba08951` 的独立临时 worktree 中，执行
+`dotnet test collection/collectors/Heartbeat.Collector.VRChat.Tests --filter FullyQualifiedName~VRChatPackageBuildScriptTests --nologo -v minimal`，
+稳定复现上述两项 `DirectoryNotFoundException`。随后仅修改测试的仓库根识别，同时接受
+`.git` 目录和文件，保留构建脚本存在检查及原有安全断言。
+
+应用修复后，在真实 worktree 和普通 checkout 分别执行
+`dotnet test collection/collectors/Heartbeat.Collector.VRChat.Tests --nologo -v minimal`，
+均为 21 passed / 0 failed / 0 skipped，包含原先失败的两项。临时 worktree 已清理。
+此次仅回归 VRChat 测试项目，不改写上述历史全量测试结果，也不表示当前全量测试已重跑通过。
 
 ## 现有架构约束
 

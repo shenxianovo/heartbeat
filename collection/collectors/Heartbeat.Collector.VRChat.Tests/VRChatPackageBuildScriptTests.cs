@@ -103,8 +103,9 @@ public sealed class VRChatPackageBuildScriptTests : IDisposable
              directory is not null;
              directory = directory.Parent)
         {
+            var gitEntry = Path.Combine(directory.FullName, ".git");
             if (File.Exists(Path.Combine(directory.FullName, "scripts", "build-vrchat-package.sh")) &&
-                Directory.Exists(Path.Combine(directory.FullName, ".git")))
+                (Directory.Exists(gitEntry) || File.Exists(gitEntry)))
                 return directory.FullName;
         }
         throw new DirectoryNotFoundException("Could not locate the Heartbeat repository root.");

@@ -9,4 +9,6 @@ namespace Heartbeat.Collection.Hub.Hosting;
 public interface IHostShutdownEvidence
 {
     DeliveryRemainder ShutdownRemainder { get; }
+    /// <summary>Optional owner diagnostics; never substitutes for custody evidence.</summary>
+    string? ShutdownDetails => null;
 }

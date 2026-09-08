@@ -55,7 +55,9 @@ InputEventBuffer 的内存模式和持久模式都采用保留读取，每批最
 Desktop 与 Headless 复用 PeriodicUploadWorker，退出先取消并等待周期上传结束，再以退出期限执行
 终态上传。Input Recording 关闭时仍按既有策略不读、不上传输入 backlog，不能沿用旧的成功结果。
 Ticket 05 的应用退出汇总读取停产后各源的当前保管证据；关闭的 Input Recording 也参与安全判定，
-但不会因此恢复上传。未知余量阻止最终动作，本地持久余量不阻止退出。
+但不会因此恢复上传。Ticket 06 将 Desktop 改为 best-effort：未知余量记录风险后也继续退出，
+不改变余量证据；本地持久余量始终不阻止退出。Desktop/Headless 的终态交付轮次共享 5 秒联网
+预算，取消后仍尝试本地持久化；不新增退出层重试，也不把该预算当作整个 Host 停止硬期限。
 
 ## Consequences
 

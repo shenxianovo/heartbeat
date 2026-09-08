@@ -26,7 +26,11 @@ public abstract class PeriodicUploadWorker(Func<TimeSpan> interval) : Background
     {
         // The periodic attempt must return custody before a final attempt can touch its data.
         await base.StopAsync(CancellationToken.None);
-        try { await DrainOnceAsync(cancellationToken); }
+        // One final round shares a short network budget. Even after cancellation the sources
+        // still get their local persistence attempt; this is not a deadline for native cleanup.
+        using var finalDelivery = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        finalDelivery.CancelAfter(TimeSpan.FromSeconds(5));
+        try { await DrainOnceAsync(finalDelivery.Token); }
         catch (Exception exception) { Log.Warning(exception, "停止时上传收尾失败；数据责任由各上传流报告"); }
     }
 }

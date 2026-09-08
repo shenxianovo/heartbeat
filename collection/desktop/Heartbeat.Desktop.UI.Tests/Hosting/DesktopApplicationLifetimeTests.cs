@@ -112,18 +112,26 @@ public sealed class DesktopApplicationLifetimeTests
     [Theory]
     [InlineData(null)]
     [InlineData(1)]
-    public void UnconfirmedData_BlocksFinalActionEvenWhenStopSucceeds(int? unconfirmed)
+    public void UnconfirmedData_ExitsAfterBestEffortCleanup_WithoutClaimingDataIsSafe(int? unconfirmed)
     {
         using var ui = new UiContext();
-        var host = new TestHost(new YieldingResource()) { Remainder = new(0, unconfirmed) };
-        var lifetime = new DesktopApplicationLifetime(host);
+        var resource = new YieldingResource { Failure = new IOException("cleanup failed") };
+        var host = new TestHost(resource) { Remainder = new(0, unconfirmed) };
+        using var lifetime = new DesktopApplicationLifetime(host);
         var desktop = new DesktopParticipant();
         lifetime.Attach(desktop);
         var exiting = lifetime.RequestExitAsync(DesktopExitReason.Quit);
         ui.RunUntil(exiting);
-        Assert.True(exiting.IsFaulted);
-        Assert.Equal(0, desktop.ExitCalls);
-        Assert.False(lifetime.IsShutdownPrepared);
+        Assert.True(exiting.IsCompletedSuccessfully, exiting.Exception?.ToString());
+        Assert.False(lifetime.Result!.IsDataSafe);
+        Assert.Equal(unconfirmed, Assert.Single(lifetime.Result.Delivery).Remainder.Unconfirmed);
+        Assert.Contains(resource.Failure, lifetime.Result.CleanupErrors);
+        Assert.True(desktop.Disposed);
+        Assert.Equal(1, resource.DisposeCalls);
+        Assert.Equal(1, desktop.ExitCalls);
+        Assert.Equal(1, host.Updates.FinalCalls);
+        Assert.True(lifetime.IsShutdownPrepared);
+        Assert.Same(exiting, lifetime.RequestExitAsync(DesktopExitReason.Quit));
     }
 
     [Fact]
@@ -138,8 +146,8 @@ public sealed class DesktopApplicationLifetimeTests
         ui.RunUntil(quit);
         Assert.True(quit.IsCompletedSuccessfully);
         Assert.False(lifetime.Result!.IsDataSafe);
-        Assert.False(desktop.Disposed);
-        Assert.Equal(0, desktop.ExitCalls);
+        Assert.True(desktop.Disposed);
+        Assert.Equal(1, desktop.ExitCalls);
     }
 
     [Fact]

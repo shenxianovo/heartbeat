@@ -85,6 +85,8 @@ menu/tray behavior and packaged native exit remain separate smoke checks.
 
 ## Application admission and final action (Ticket 05)
 
+This records the Ticket 05 policy; unknown-data blocking was superseded by Ticket 06 below.
+
 The application now closes Host command admission immediately and consumes each stopped subtree's
 custody evidence. Durable offline remainder permits exit even if cleanup fails; unknown data blocks
 both the installer and native exit and keeps stopped owners available. Update preparation freezes a
@@ -92,6 +94,15 @@ candidate without launching it. After safe cleanup the application schedules the
 scheduling failure is recorded and native exit still proceeds. This supersedes the initial policy
 above that any cleanup exception prevents exit. Recovery interaction remains a separate follow-up in
 [ADR-052](./052-desktop-exit-intent-and-host-ownership.md).
+
+## Best-effort exit (Ticket 06)
+
+Following the owner's revised decision, unknown custody is logged as a possible data-loss risk and
+does not block cleanup or the frozen final action. The same transaction still awaits stop and all
+cleanup before invoking the installer and native exit once. Custody evidence remains unchanged;
+successful exit does not imply successful persistence. The final upload round shares a five-second
+network budget while local persistence is still attempted after cancellation. There is no additional
+retry/force-exit UI or global process deadline; see ADR-052 for the remaining boundaries.
 
 ## References
 

@@ -14,6 +14,45 @@ namespace Heartbeat.Collection.Hub.Tests.Runtime;
 public class UploadWorkerShutdownTests
 {
     [Fact]
+    public async Task Stop_BoundsFinalNetworkAttempt_AndStillPersistsTheOtherStream()
+    {
+        var cache = new Cache<ActivitySegmentItem>();
+        var source = new Heartbeat.Collection.Hub.Segments.SegmentIngestService(new Heartbeat.Collection.Hub.Time.SystemClock(), cache);
+        var tail = new ActivitySegmentItem { Id = Guid.CreateVersion7() };
+        source.UpsertDurable(tail, 1);
+        var segmentRequests = 0;
+        var segments = new UploadStream<ActivitySegmentItem>("段", [source], (_, _) =>
+        {
+            segmentRequests++;
+            return Task.FromResult(ApiResult.Ok);
+        });
+        var inputCache = new Cache<InputEventItem>();
+        inputCache.Add([new InputEventItem()]);
+        var release = new TaskCompletionSource<ApiResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inputs = new UploadStream<InputEventItem>("输入", [new CachedUploadSource<InputEventItem>(inputCache)],
+            (_, token) => release.Task.WaitAsync(token));
+        var settings = new Settings();
+        using var http = new HttpClient();
+        using var worker = new UploadWorker(segments, inputs, settings, new EnabledInputEventRecordingPolicy(),
+            new DeclarationUplinkService(new HeartbeatApiClient(http), settings), new NullHubRuntimeHooks());
+
+        var stopping = worker.StopAsync(CancellationToken.None);
+        try
+        {
+            await stopping.WaitAsync(TimeSpan.FromSeconds(8));
+            Assert.Equal(0, segmentRequests);
+            Assert.Equal(tail.Id, Assert.Single(cache.Items).Id);
+            Assert.Single(inputCache.Items);
+            Assert.Equal(new DeliveryRemainder(2, 0), worker.ShutdownRemainder);
+        }
+        finally
+        {
+            release.TrySetResult(ApiResult.Ok);
+            await stopping.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+    }
+
+    [Fact]
     public async Task Stop_CancelsAndJoinsPeriodicUpload_BeforePersistingFinalTail()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -11,7 +11,7 @@ public enum DesktopExitReason
     UpdateRestart
 }
 
-public sealed record DesktopDeliveryEvidence(string Owner, DeliveryRemainder Remainder);
+public sealed record DesktopDeliveryEvidence(string Owner, DeliveryRemainder Remainder, string? Details = null);
 
 public sealed record DesktopExitResult(
     IReadOnlyList<DesktopDeliveryEvidence> Delivery,
@@ -107,16 +107,11 @@ public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
         {
             var finalAction = Updates.PrepareExit(reason);
             await CleanupAsync(reason);
-            if (Result?.IsDataSafe != true)
-            {
-                Serilog.Log.Error("退出被阻止：数据保管结果 {@Delivery}，收尾错误 {@Errors}", Result?.Delivery, Result?.CleanupErrors);
-                throw new InvalidOperationException("Cannot confirm local data persistence; automatic exit is blocked.");
-            }
             try { finalAction(); }
             catch (Exception exception)
             {
-                Result = Result with { FinalActionError = exception };
-                Serilog.Log.Error(exception, "最终动作失败，数据已安全保管，继续退出");
+                Result = Result! with { FinalActionError = exception };
+                Serilog.Log.Error(exception, "最终动作失败，继续退出；数据保管结果不变");
             }
             lock (_gate) _exitAuthorized = true;
             // Only this final callback may end the UI loop. Do not require a UI continuation after it.
@@ -153,7 +148,7 @@ public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
         {
             var delivery = _evidence.Select(source =>
             {
-                try { return new DesktopDeliveryEvidence(source.GetType().Name, source.ShutdownRemainder); }
+                try { return new DesktopDeliveryEvidence(source.GetType().Name, source.ShutdownRemainder, source.ShutdownDetails); }
                 catch (Exception exception)
                 {
                     failures.Add(exception);
@@ -163,9 +158,9 @@ public sealed class DesktopApplicationLifetime(IHost host) : IDisposable
             Result = new(delivery, failures.ToArray());
             if (!Result.IsDataSafe)
             {
-                // Keep the stopped owners and their data available; recovery is a separate policy.
-                completion.SetResult();
-                return;
+                // Best effort is an exit policy, not evidence that unknown data became durable.
+                Serilog.Log.Error("部分数据尚未确认保存，退出可能丢失；继续清理和退出。数据保管结果 {@Delivery}，收尾错误 {@Errors}",
+                    Result.Delivery, Result.CleanupErrors);
             }
         }
         if (_desktop is not null)

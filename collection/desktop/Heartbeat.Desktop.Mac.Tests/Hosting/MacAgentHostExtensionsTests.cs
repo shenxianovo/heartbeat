@@ -139,11 +139,53 @@ public sealed class MacAgentHostExtensionsTests : IDisposable
         Assert.Contains(application.Result.Delivery, item => item.Remainder.RetainedLocally > 0);
     }
 
+    [Fact]
+    public async Task ApplicationExit_WhenSystemIngressCannotBeSaved_ExitsOnceWithUnknownEvidence()
+    {
+        using var host = new HostBuilder().ConfigureServices(services =>
+        {
+            foreach (var descriptor in BuildServices()) services.Add(descriptor);
+            services.AddSingleton(DesktopInstallation.Detached);
+        }).Build();
+        host.Services.GetRequiredService<MacConfigManager>().Update(config => config.IngestPort = 0);
+        await host.StartAsync();
+        using var application = new DesktopApplicationLifetime(host);
+        var desktop = new ExitParticipant();
+        application.Attach(desktop);
+        var binding = Assert.Single(host.Services.GetServices<IHostedService>().OfType<SystemCollectorHostedService>());
+        var admission = host.Services.GetRequiredService<HostOperationAdmission>();
+
+        // A real filesystem failure in the isolated profile: the Collector's data directory
+        // becomes unavailable after startup. Keep its existing durable files for inspection.
+        var data = Assert.Single(Directory.GetDirectories(Path.Combine(_root, "collector-data")));
+        Directory.Move(data, data + ".retained");
+        File.WriteAllText(data, "blocks directory creation");
+        host.Services.GetRequiredService<FakeClock>().Advance(TimeSpan.FromSeconds(2));
+        Assert.Throws<IOException>(() => host.Services.GetRequiredService<AppMonitorService>().PushCurrentSnapshot());
+
+        var exiting = application.RequestExitAsync(DesktopExitReason.Quit);
+        Assert.Same(exiting, application.RequestExitAsync(DesktopExitReason.Quit));
+        await exiting.WaitAsync(TimeSpan.FromSeconds(20));
+
+        Assert.Equal(1, desktop.ExitCalls);
+        Assert.False(application.Result!.IsDataSafe);
+        var evidence = Assert.Single(application.Result.Delivery, item => item.Owner == nameof(SystemCollectorHostedService));
+        Assert.False(evidence.Remainder.IsDurable);
+        var drain = Assert.IsType<InProcessCollectorDrainResult>(binding.DrainResult);
+        Assert.False(drain.LogicalResult.RemainderDurable);
+        Assert.Contains("PersistenceFailed", evidence.Details);
+        Assert.Throws<InvalidOperationException>(() => admission.Run(() => { }));
+        Assert.Same(exiting, application.RequestExitAsync(DesktopExitReason.Quit));
+        Assert.Equal(drain, binding.DrainResult);
+        Assert.True(File.Exists(data));
+    }
+
     private sealed class ExitParticipant : IDesktopApplicationParticipant
     {
-        public bool Exited { get; private set; }
+        public int ExitCalls { get; private set; }
+        public bool Exited => ExitCalls > 0;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-        public Task ExitAsync(DesktopExitReason reason) { Exited = true; return Task.CompletedTask; }
+        public Task ExitAsync(DesktopExitReason reason) { ExitCalls++; return Task.CompletedTask; }
     }
 
     private static bool NamesANamedOptionalCollector(Type? type) =>

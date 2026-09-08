@@ -277,7 +277,8 @@ _Avoid_: 用窗口关闭表示 Agent 退出、把共享等待任务等同于安�
 **Desktop Exit Result（桌面退出结果）**:
 一次已接纳退出的数据保管证据、资源清理结果与最终动作结果。数据安全不要求已上传完；确认本地持久化
 即可安全结束本次运行，未知余量不能被清理成功或超时替代。
-_Avoid_: 用上传成功率表示退出安全、用清理异常推断数据丢失
+退出完成与数据安全是两个独立事实；best-effort 退出可能完成但仍有未知余量。
+_Avoid_: 用上传成功率表示退出安全、用清理异常推断数据丢失、用退出成功表示数据已保存
 
 ## Relationships
 
@@ -286,7 +287,7 @@ _Avoid_: 用上传成功率表示退出安全、用清理异常推断数据丢�
 - `Heartbeat.Collection.Hub` 提供纯 .NET 的 hub 运行时（loopback ingest、Collector Registry/declaration、认证客户端、段缓冲、Current Activity、Upload Stream、presence 与缓存 seam），可由桌面或无头 host 组合，不依赖桌面采集、UI、平台 API 或发布供应商
 - `Heartbeat.Collection.Headless` 是带 owner-only 管理 API 的无头 Web host：一个 Collector Runtime 从本地配置托管多个 ManagedProcess Collector Instance；深 `HeadlessInstancePipelines` module 按 Instance 吸收投影、当前状态、Analytics 上传身份、缓存与终态 drain，Fleet 不接触这些实现；服务器 Machine 身份不进入 Fact 归属
 - `Heartbeat.Collector.System` 消费 App 激活、focused-window 切换、同窗标题变化与 away 等语义观察，产出 system ActivitySegment；平台 adapter 不把原生回调形状泄漏进状态机
-- `Heartbeat.Desktop.Updater.Velopack` 统一承载 Windows/macOS 的 Velopack Update 生命周期（检查、下载、重试、ReadyToApply 门控与调度应用），并作为供应商依赖防火墙；platform head 只选择 Release channel；共享应用退出 owner 在数据安全和清理完成后调度 updater，再执行原生退出
+- `Heartbeat.Desktop.Updater.Velopack` 统一承载 Windows/macOS 的 Velopack Update 生命周期（检查、下载、重试、ReadyToApply 门控与调度应用），并作为供应商依赖防火墙；platform head 只选择 Release channel；共享应用退出 owner 在停止、收集保管证据和清理完成后调度 updater，再执行原生退出；未知数据记录风险，不阻止既定最终动作
 - `Heartbeat.Desktop.Windows` 组合 Win32 观察、MachineGuid、图标、自启动、共享 Avalonia UI、托盘与 Velopack Update
 - `Heartbeat.Desktop.Mac` 组合 NSWorkspace App/硬 away 观察、IOPlatformUUID、bundle 图标、共享 Avalonia UI、菜单栏 accessory 生命周期与逐用户 login start
 - `Heartbeat.Desktop.UI` 是共享 Avalonia presentation module；ViewModel 只依赖 platform-head seam，可在不创建原生窗口时测试

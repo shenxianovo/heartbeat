@@ -28,6 +28,7 @@ public sealed class SystemCollectorHostedService(
 {
     private InProcessCollectorActivation? _activation;
     public InProcessCollectorDrainResult? DrainResult => _activation?.DrainResult;
+    public string? ShutdownDetails => DrainResult?.ToString();
 
     public DeliveryRemainder ShutdownRemainder => DrainResult?.LogicalResult is
         { RemainderDurable: true, PendingFacts: { } facts, PendingGaps: { } gaps }

@@ -96,6 +96,8 @@ public sealed class VelopackUpdateControllerTests
     [InlineData(DesktopExitReason.UpdateRestart, false, true)]
     [InlineData(DesktopExitReason.UpdateRestart, true, true)]
     [InlineData(DesktopExitReason.UpdateRestart, false, false)]
+    [InlineData(DesktopExitReason.Quit, false, false)]
+    [InlineData(DesktopExitReason.UpdateRestart, true, false)]
     public async Task Application_ConsumesCustodyBeforeOneInstallerAction(
         DesktopExitReason reason, bool schedulingFails, bool durable)
     {
@@ -128,24 +130,13 @@ public sealed class VelopackUpdateControllerTests
             Assert.Equal(0, desktop.Exits);
             var duplicateApply = reason == DesktopExitReason.UpdateRestart ? updates.ApplyAsync() : null;
             subtree.Release.SetResult();
-            if (durable)
-            {
-                await exiting;
-                if (duplicateApply is not null) Assert.True(await duplicateApply);
-                Assert.Equal(1, client.ScheduleAttempts);
-                Assert.Equal(reason == DesktopExitReason.UpdateRestart, client.Restart);
-                Assert.Equal(1, desktop.Exits);
-                Assert.Equal(schedulingFails, application.Result!.FinalActionError is not null);
-            }
-            else
-            {
-                await Assert.ThrowsAsync<InvalidOperationException>(() => exiting);
-                if (duplicateApply is not null)
-                    await Assert.ThrowsAsync<InvalidOperationException>(() => duplicateApply);
-                Assert.Equal(0, client.ScheduleAttempts);
-                Assert.Equal(0, desktop.Exits);
-                Assert.False(desktop.Disposed);
-            }
+            await exiting;
+            if (duplicateApply is not null) Assert.True(await duplicateApply);
+            Assert.Equal(1, client.ScheduleAttempts);
+            Assert.Equal(reason == DesktopExitReason.UpdateRestart, client.Restart);
+            Assert.Equal(1, desktop.Exits);
+            Assert.Equal(durable, application.Result!.IsDataSafe);
+            Assert.Equal(schedulingFails, application.Result.FinalActionError is not null);
         }
         finally
         {
